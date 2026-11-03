@@ -2,9 +2,13 @@
   "name": "zoho-books-autoscan",
   "version": "0.1.0",
   "private": true,
-  "description": "Zoho Books supplier-invoice → bill automation on Zoho Catalyst + Claude (tooling root; the deployable function lives in functions/autoscan-run)",
-  "author": { "name": "Sakis Oikonomou" },
-  "engines": { "node": ">=20" },
+  "description": "Zoho Books supplier-invoice \u2192 bill automation on Zoho Catalyst + Claude (tooling root; the deployable function lives in functions/autoscan-run)",
+  "author": {
+    "name": "Sakis Oikonomou"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "postinstall": "cd functions/autoscan-run && npm install --no-audit --no-fund",
     "test": "cd functions/autoscan-run && node --test 'test/*.test.js'",
@@ -12,7 +16,8 @@
     "probe": "node scripts/books-probe.js",
     "seed": "node scripts/seed-sandbox.js",
     "invoices": "node scripts/make-test-invoices.js",
-    "run": "node scripts/local-run.js"
+    "run": "node scripts/local-run.js",
+    "claude-check": "node scripts/claude-check.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",

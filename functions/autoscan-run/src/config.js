@@ -40,7 +40,7 @@ function loadConfig(env = process.env) {
     claude: {
       apiKey: env.ANTHROPIC_API_KEY || '',
       // Set to the current Haiku id from https://platform.claude.com/docs/en/about-claude/models
-      model: env.CLAUDE_MODEL || 'claude-haiku-4-5',
+      model: env.CLAUDE_MODEL || 'claude-haiku-5-5',
       fallbackModel: env.CLAUDE_FALLBACK_MODEL || '', // e.g. a Sonnet id; '' = disabled
       fallbackBelowConfidence: num(env.CLAUDE_FALLBACK_BELOW_CONFIDENCE, 0), // 0 = never
       maxOutputTokens: num(env.CLAUDE_MAX_OUTPUT_TOKENS, 1200),
