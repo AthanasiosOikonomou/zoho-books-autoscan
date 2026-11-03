@@ -199,3 +199,12 @@ test('two copies of the same invoice in one batch: one bill, the other DUPLICATE
   assert.deepEqual(statuses, [STATUS.BILLED, STATUS.DUPLICATE]);
   assert.equal(books.state.created.length, 1);
 });
+
+test('bill is NOT created when the PO template total differs from the invoice', async () => {
+  const books = fakeBooks({ docs: [{ document_id: 'd30', file_name: 't.pdf', transactions: [] }], pos });
+  books.api.getBillFromPurchaseOrders = async () => ({ vendor_id: 'v1', date: '2026-11-03', purchaseorder_ids: ['po1'], total: 999, line_items: pos[0].line_items });
+  const ex = fakeExtractor({ d30: { po_reference: 'PO-00001', gross: 120 } });
+  const store = new JsonFileStore(); const m = mailer();
+  const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store, mailer: m, logger });
+  assert.equal(r.results[0].reason_code, 'BILL_TEMPLATE_MISMATCH'); assert.equal(books.state.created.length, 0);
+});

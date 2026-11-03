@@ -163,6 +163,13 @@ async function processDocument(ctx, doc, prior) {
     }
 
     const template = await books.getBillFromPurchaseOrders(po.purchaseorder_id);
+    // Safety net: Books computes the template's total from the quantities it proposes
+    // (remaining quantities on a partially billed PO). If that is not the invoice
+    // amount, creating the bill would post the wrong figure — stop here instead.
+    const templateTotal = Number(template && template.total);
+    if (Number.isFinite(templateTotal) && Math.abs(templateTotal - extraction.totals.gross) > config.matching.totalTolerance) {
+      return finish(STATUS.EXCEPTION, reason('BILL_TEMPLATE_MISMATCH', `Books would bill ${fmt(templateTotal)} from the PO's remaining quantities but the invoice is ${fmt(extraction.totals.gross)}`));
+    }
     const payload = buildBillPayload({
       template,
       invoiceNumber: extraction.invoice_number || `${po.purchaseorder_number}-${documentId}`,

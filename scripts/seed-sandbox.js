@@ -105,6 +105,9 @@ const POS = [
     if (!c) {
       c = (await books.request('/contacts', { method: 'POST', json: { contact_name: v.name, company_name: v.name, contact_type: 'vendor', payment_terms: v.terms, payment_terms_label: `Net ${v.terms}` } })).contact;
       console.log(`+ vendor ${v.name} (${c.contact_id})`);
+    } else if (reset) {
+      c = (await books.request(`/contacts/${c.contact_id}`, { method: 'PUT', json: { payment_terms: v.terms, payment_terms_label: `Net ${v.terms}` } })).contact;
+      console.log(`~ vendor ${v.name} terms Net ${v.terms}`);
     } else console.log(`= vendor ${v.name} (${c.contact_id})`);
     out.vendors[v.key] = { contact_id: c.contact_id, name: v.name, terms: v.terms, carriageRule: v.carriageRule, carriageTolerance: v.carriageTolerance };
   }
@@ -119,6 +122,12 @@ const POS = [
     } else console.log(`= item ${it.name} (${i.item_id})`);
     out.items[it.key] = { item_id: i.item_id, name: it.name, sku: it.sku, mpn: it.mpn, rate: it.rate };
   }
+
+  // payment terms must exist in Settings for vendors/POs to carry them (no API to create them)
+  const terms = await books.getPaymentTerms();
+  const missing = [...new Set(VENDORS.map((v) => v.terms))].filter((d) => !terms.some((t) => Number(t.payment_terms) === d));
+  if (missing.length) console.log(`! Payment terms missing in Settings: ${missing.map((d) => `Net ${d}`).join(', ')} — add them in the UI (Settings → Preferences → Payment Terms); POs/bills will show "Due on Receipt" until then.`);
+  else console.log(`= payment terms present: ${terms.map((t) => t.payment_terms_label).join(', ')}`);
 
   // tax: find a 20% tax or create one
   const VAT_PCT = 20;
@@ -174,7 +183,7 @@ const POS = [
     const tag = `[seed:${p.key}]`;
     const line_items = p.lines.map(([k, q]) => ({ item_id: out.items[k].item_id, quantity: q, rate: out.items[k].rate, tax_id: tax.tax_id }));
     if (p.carriage) line_items.push({ item_id: carriageId, description: 'Delivery charge', quantity: 1, rate: p.carriage, tax_id: tax.tax_id });
-    const body = { vendor_id: vendor.contact_id, date: today, reference_number: p.reference || undefined, line_items, is_inclusive_tax: false, notes: `AutoScan test PO ${tag}` };
+    const body = { vendor_id: vendor.contact_id, date: today, reference_number: p.reference || undefined, line_items, is_inclusive_tax: false, payment_terms: vendor.terms, payment_terms_label: `Net ${vendor.terms}`, notes: `AutoScan test PO ${tag}` };
 
     const wanted = signature(line_items);
     const matches = (await vendorPoDetails(vendor.contact_id))

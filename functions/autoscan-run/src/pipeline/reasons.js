@@ -16,6 +16,7 @@ const REASONS = Object.freeze({
   AI_ERROR: { retry: true, action: 'Temporary reading error. Will be retried automatically.' },
   BOOKS_ERROR: { retry: true, action: 'Temporary Zoho Books error. Will be retried automatically.' },
   ATTACH_FAILED: { retry: true, action: 'Bill was created but the PDF could not be attached yet. Will be retried automatically.' },
+  BILL_TEMPLATE_MISMATCH: { retry: true, action: 'The PO\'s remaining (un-billed) quantities do not add up to this invoice. Check earlier bills on the PO; bill manually if needed.' },
   // Phase 2
   NO_MPN: { retry: true, action: 'One or more invoice lines have no product code (MPN). Bill manually.' },
   LINE_UNMATCHED: { retry: true, action: 'An invoice line does not match any PO line by MPN. Check the PO lines / item MPNs.' },
