@@ -9,6 +9,7 @@
  *   node scripts/seed-sandbox.js            → create (idempotent by vendor/item name and PO tag)
  *   node scripts/seed-sandbox.js --plan     → print the plan, touch nothing
  *   node scripts/seed-sandbox.js --reset    → rewrite the seeded POs in place (same numbers; vendors/items kept)
+ *   node scripts/seed-sandbox.js --prune    → delete duplicate seeded POs (keeps the lowest-numbered one per scenario)
  *
  * Facts this seed encodes (verified on the API):
  *   - Books purchase orders have NO shipping-charge field, only `adjustment`.
@@ -82,6 +83,7 @@ const POS = [
 (async () => {
   const planOnly = process.argv.includes('--plan');
   const reset = process.argv.includes('--reset');
+  const prune = process.argv.includes('--prune');
   const config = loadConfig(process.env);
   if (!planOnly) {
     if (!config.books.orgId || config.books.orgId !== process.env.SEED_ALLOW_ORG_ID) {
@@ -149,16 +151,47 @@ const POS = [
     out.items.carriage = { item_id: i.item_id, name, sku: null, mpn: null, rate: 0 };
   }
 
-  // purchase orders
+  // purchase orders — existing ones are recognised by vendor + line signature
+  // (the list endpoint does not return notes). The LOWEST-numbered match is the
+  // canonical PO (that's the number printed on the test PDFs); extras are
+  // deleted with --prune.
   const today = new Date().toISOString().slice(0, 10);
+  const carriageId = out.items.carriage.item_id;
+  const signature = (lines) => lines.filter((l) => l.item_id !== carriageId).map((l) => `${l.item_id}:${Number(l.quantity)}`).sort().join(',');
+  const detailCache = new Map(); // vendor contact_id → [po detail]
+  async function vendorPoDetails(vendorId) {
+    if (!detailCache.has(vendorId)) {
+      const list = (await books.request('/purchaseorders', { query: { vendor_id: vendorId } })).purchaseorders || [];
+      const details = [];
+      for (const x of list) details.push((await books.request(`/purchaseorders/${x.purchaseorder_id}`)).purchaseorder);
+      detailCache.set(vendorId, details);
+    }
+    return detailCache.get(vendorId);
+  }
+
   for (const p of POS) {
     const vendor = out.vendors[p.vendor];
     const tag = `[seed:${p.key}]`;
-    const existing = (await books.request('/purchaseorders', { query: { vendor_id: vendor.contact_id } })).purchaseorders || [];
-    let po = existing.find((x) => (x.notes || '').includes(tag) || (x.reference_number || '') === tag);
     const line_items = p.lines.map(([k, q]) => ({ item_id: out.items[k].item_id, quantity: q, rate: out.items[k].rate, tax_id: tax.tax_id }));
-    if (p.carriage) line_items.push({ item_id: out.items.carriage.item_id, description: 'Delivery charge', quantity: 1, rate: p.carriage, tax_id: tax.tax_id });
+    if (p.carriage) line_items.push({ item_id: carriageId, description: 'Delivery charge', quantity: 1, rate: p.carriage, tax_id: tax.tax_id });
     const body = { vendor_id: vendor.contact_id, date: today, reference_number: p.reference || undefined, line_items, is_inclusive_tax: false, notes: `AutoScan test PO ${tag}` };
+
+    const wanted = signature(line_items);
+    const matches = (await vendorPoDetails(vendor.contact_id))
+      .filter((d) => signature(d.line_items || []) === wanted)
+      .sort((a, b) => String(a.purchaseorder_number).localeCompare(String(b.purchaseorder_number), undefined, { numeric: true }));
+    let po = matches[0] || null;
+    const extras = matches.slice(1);
+
+    if (extras.length && prune) {
+      for (const e of extras) {
+        await books.request(`/purchaseorders/${e.purchaseorder_id}`, { method: 'DELETE' });
+        console.log(`- PO ${e.purchaseorder_number} ${p.key} deleted (duplicate of ${po.purchaseorder_number})`);
+      }
+    } else if (extras.length) {
+      console.log(`! ${p.key}: ${extras.length} duplicate PO(s) ${extras.map((e) => e.purchaseorder_number).join(', ')} — run with --prune to delete`);
+    }
+
     if (po && reset) {
       po = (await books.request(`/purchaseorders/${po.purchaseorder_id}`, { method: 'PUT', json: body })).purchaseorder;
       console.log(`~ PO ${po.purchaseorder_number} ${p.key} rewritten: sub_total=${po.sub_total} tax=${po.tax_total} total=${po.total}`);

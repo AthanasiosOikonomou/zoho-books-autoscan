@@ -36,13 +36,16 @@ test('sumBilled', () => { assert.equal(sumBilled([{ total: 10.5 }, { total: '20.
 
 test('candidatesFor: legacy IPO/ reference', () => {
   const c = candidatesFor('IPO/316037');
-  assert.deepEqual(c.slice(0, 3), ['IPO/316037', '316037', 'PO-316037']);
+  assert.deepEqual(c.slice(0, 3), ['IPO/316037', 'IPO 316037', 'IPO-316037']);
+  assert.ok(c.includes('PO-316037'));
   assert.ok(c.includes('316037'));
 });
-test('candidatesFor: embedded text with suffix', () => {
+test('candidatesFor: embedded text with suffix yields the legacy token first', () => {
   const c = candidatesFor('Order No. IPO 317792-Harlow', { legacyPrefixes: ['IPO/', 'IPO ', 'IPO-'] });
+  assert.deepEqual(c.slice(0, 4), ['Order No. IPO 317792-Harlow', 'IPO/317792', 'IPO 317792', 'IPO-317792']);
   assert.ok(c.includes('PO-317792'));
   assert.ok(c.includes('317792'));
+  assert.ok(candidatesFor('Your order: PO 12').includes('PO-00012'));
 });
 test('candidatesFor: Zoho format and short numbers', () => {
   assert.ok(candidatesFor('PO-00235').includes('PO-00235'));

@@ -42,10 +42,14 @@ Valid labels: PO No, P.O. No, P.O.No., Purchase Order, Purchase Order No, Custom
 
 Do not use numbers tied to: Invoice No / Supplier Invoice, Our Order No / Sales Order, account numbers, VAT numbers, delivery notes, shipping references, bank details, tracking numbers.
 
+**The supplier's own order number is not a PO reference.** A field labelled just `Order No`, `Order Number`, `Order Ref`, `Our Order`, `Sales Order` or `SO` — without `Your`, `Customer` or `PO` in the label — is the supplier's internal sales-order number (typically near their invoice number, often formatted like `S001376`, `SO-77812`). Never return it as `po_reference`, even when nothing else is printed: return `null` instead.
+
+What a genuine customer PO reference looks like for this customer: `PO-00235` (Books format), `IPO/316037` or `IPO 316037` (legacy), or a bare 6-digit number such as `316037`. A value under a generic label is acceptable as PO reference only if it matches one of these shapes.
+
 Priority:
 1. A value beside an explicit PO / customer-order label.
 2. If the value contains extra text (e.g. `Order No. IPO 317792-Harlow`), return the reference portion as printed (`IPO 317792-Harlow`).
-3. If no explicit PO label exists, a standalone value under `Reference` in the order/reference area may be used, provided it is not part of bank, VAT, delivery, product-table, tracking or contact details.
+3. If no explicit PO label exists, a standalone value under `Reference` in the order/reference area may be used, provided it matches a genuine PO shape (above) and is not part of bank, VAT, delivery, product-table, tracking or contact details.
 4. If several candidates exist, prefer the one in PO / customer-order context and lower confidence.
 5. If nothing qualifies, return `null`.
 
