@@ -61,7 +61,7 @@ const pos = [
 
 function cfg(over = {}) {
   const c = loadConfig({ BOOKS_ORG_ID: 'org', ...over });
-  c.run.retryAfterHours = 12;
+  if (over.RETRY_AFTER_HOURS === undefined) c.run.retryAfterHours = 12;
   return c;
 }
 
@@ -155,4 +155,34 @@ test('run lock: a fresh RUNNING run makes the next run skip', async () => {
   await store.beginRun({ run_id: 'other', started: new Date().toISOString() });
   const r = await runAutoscan({ config: cfg(), books: books.api, extractor: fakeExtractor({}), store, mailer: m, logger });
   assert.equal(r.skipped, true);
+});
+
+test('documents marked WOULD_BILL in dry-run are billed by the first live run', async () => {
+  const books = fakeBooks({ docs: [{ document_id: 'd10', file_name: 'i.pdf', transactions: [] }], pos });
+  const ex = fakeExtractor({ d10: { po_reference: 'PO-00001', gross: 120 } });
+  const store = new JsonFileStore(); const m = mailer();
+  const t0 = new Date('2026-11-03T08:00:00Z');
+  const dry = await runAutoscan({ config: cfg(), books: books.api, extractor: ex, store, mailer: m, logger, now: () => t0 });
+  assert.equal(dry.results[0].status, STATUS.WOULD_BILL); assert.equal(books.state.created.length, 0);
+  const live = await runAutoscan({ config: cfg({ DRY_RUN: 'false', RETRY_AFTER_HOURS: '0' }), books: books.api, extractor: ex, store, mailer: m, logger, now: () => new Date(t0.getTime() + 60000) });
+  assert.equal(live.billed, 1); assert.equal(books.state.created.length, 1); assert.equal(ex.seen.length, 1, 'no second extraction');
+});
+
+test('a prompt change re-reads extraction-related exceptions but not total mismatches', async () => {
+  const books = fakeBooks({ docs: [
+    { document_id: 'd11', file_name: 'j.pdf', transactions: [] },
+    { document_id: 'd12', file_name: 'k.pdf', transactions: [] },
+  ], pos });
+  const ex = fakeExtractor({ d11: { po_reference: null }, d12: { po_reference: 'PO-00001', gross: 999 } });
+  ex.promptVersion = 'v1';
+  const store = new JsonFileStore(); const m = mailer();
+  const t0 = new Date('2026-11-03T08:00:00Z');
+  const config = cfg({ DRY_RUN: 'false', RETRY_AFTER_HOURS: '0' });
+  const r1 = await runAutoscan({ config, books: books.api, extractor: ex, store, mailer: m, logger, now: () => t0 });
+  const by1 = Object.fromEntries(r1.results.map((x) => [x.document_id, x.reason_code]));
+  assert.equal(by1.d11, 'NO_PO_REF'); assert.equal(by1.d12, 'TOTAL_MISMATCH'); assert.equal(ex.seen.length, 2);
+
+  ex.promptVersion = 'v2'; // prompt improved
+  await runAutoscan({ config, books: books.api, extractor: ex, store, mailer: m, logger, now: () => new Date(t0.getTime() + 60000) });
+  assert.deepEqual(ex.seen.slice(2), ['d11'], 'only the NO_PO_REF document was re-read');
 });

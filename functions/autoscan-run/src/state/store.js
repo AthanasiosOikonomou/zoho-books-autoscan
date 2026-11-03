@@ -28,11 +28,13 @@ const STATUS = Object.freeze({
 });
 
 const TERMINAL = new Set([STATUS.BILLED, STATUS.DUPLICATE]);
+// WOULD_BILL is retry-eligible so the first LIVE run after a dry-run period bills them.
+const RETRYABLE = new Set([STATUS.EXCEPTION, STATUS.BILLED_NO_ATTACH, STATUS.WOULD_BILL]);
 
 const DOCUMENT_FIELDS = [
   'document_id', 'file_hash', 'file_name', 'mime', 'pages', 'status', 'reason_code', 'reason_text',
   'attempts', 'first_seen', 'last_attempt', 'vendor_id', 'vendor_name', 'po_id', 'po_number', 'bill_id', 'bill_number',
-  'invoice_number', 'invoice_date', 'invoice_gross', 'extraction_json', 'model', 'tokens_in', 'tokens_out', 'run_id', 'claimed_run_id',
+  'invoice_number', 'invoice_date', 'invoice_gross', 'extraction_json', 'prompt_version', 'model', 'tokens_in', 'tokens_out', 'run_id', 'claimed_run_id',
 ];
 
 // ------------------------------------------------------------------ local / test
@@ -67,7 +69,7 @@ class JsonFileStore {
   async listRetryCandidates({ olderThan, maxAttempts, limit }) {
     const cutoff = new Date(olderThan).toISOString();
     return Object.values(this.data.documents)
-      .filter((d) => d.status === STATUS.EXCEPTION || d.status === STATUS.BILLED_NO_ATTACH)
+      .filter((d) => RETRYABLE.has(d.status))
       .filter((d) => (d.attempts || 0) < maxAttempts)
       .filter((d) => !d.last_attempt || d.last_attempt <= cutoff)
       .sort((a, b) => String(a.last_attempt).localeCompare(String(b.last_attempt)))
@@ -98,7 +100,7 @@ class JsonFileStore {
  *   status (Text), reason_code (Text), reason_text (Text), attempts (Int), first_seen (DateTime),
  *   last_attempt (DateTime), vendor_id (Text), vendor_name (Text), po_id (Text), po_number (Text),
  *   bill_id (Text), bill_number (Text), invoice_number (Text), invoice_date (Text), invoice_gross (Double),
- *   extraction_json (Text, max length), model (Text), tokens_in (Int), tokens_out (Int), run_id (Text), claimed_run_id (Text)
+ *   extraction_json (Text, max length), prompt_version (Text), model (Text), tokens_in (Int), tokens_out (Int), run_id (Text), claimed_run_id (Text)
  *
  * run_log: run_id (Text, unique), started (DateTime), finished (DateTime), status (Text), docs_seen (Int),
  *   new_count (Int), billed (Int), exceptions (Int), retried (Int), errors (Int), books_calls (Int),
@@ -158,7 +160,7 @@ class CatalystStore {
 
   async listRetryCandidates({ olderThan, maxAttempts, limit }) {
     const cutoff = toZcqlDateTime(olderThan);
-    const sql = `SELECT * FROM document_state WHERE (status = 'EXCEPTION' OR status = 'BILLED_NO_ATTACH') AND attempts < ${Number(maxAttempts)} AND last_attempt <= '${cutoff}' ORDER BY last_attempt ASC LIMIT ${Number(limit)}`;
+    const sql = `SELECT * FROM document_state WHERE (status = 'EXCEPTION' OR status = 'BILLED_NO_ATTACH' OR status = 'WOULD_BILL') AND attempts < ${Number(maxAttempts)} AND last_attempt <= '${cutoff}' ORDER BY last_attempt ASC LIMIT ${Number(limit)}`;
     const rows = await this._query(sql);
     for (const r of rows) this.rowIds.set(r.document_id, r.ROWID);
     return rows;
@@ -188,4 +190,4 @@ function toZcqlDateTime(d) {
   return `${x.getUTCFullYear()}-${p(x.getUTCMonth() + 1)}-${p(x.getUTCDate())} ${p(x.getUTCHours())}:${p(x.getUTCMinutes())}:${p(x.getUTCSeconds())}`;
 }
 
-module.exports = { STATUS, TERMINAL, DOCUMENT_FIELDS, JsonFileStore, CatalystStore, toZcqlDateTime };
+module.exports = { STATUS, TERMINAL, RETRYABLE, DOCUMENT_FIELDS, JsonFileStore, CatalystStore, toZcqlDateTime };

@@ -9,6 +9,9 @@ const { detectMime, isSupported, estimatePageCount } = require('../util/mime');
 const { sha256 } = require('../util/hash');
 const { estimateCostUsd } = require('../claude/extractor');
 
+// Reasons that come from the *reading* of the document: when the prompt changes, read again.
+const EXTRACTION_REASONS = new Set(['NO_PO_REF', 'LOW_CONFIDENCE', 'PO_NOT_FOUND', 'NOT_AN_INVOICE', 'AI_ERROR', 'UNSUPPORTED_FILE']);
+
 /**
  * Process ONE inbox document end to end. Never throws: every outcome is a
  * state record + a result row for the report.
@@ -49,6 +52,11 @@ async function processDocument(ctx, doc, prior) {
     // ---------------------------------------------------------------- 1. file + extraction
     let document = null; // { buffer, mime, fileName }
     let extraction = prior && prior.extraction_json ? safeParse(prior.extraction_json) : null;
+    const promptVersion = extractor.promptVersion || null;
+    if (extraction && promptVersion && prior.prompt_version !== promptVersion && EXTRACTION_REASONS.has(prior.reason_code)) {
+      logger.info('extraction.stale_prompt', { document_id: documentId, was: prior.prompt_version, now: promptVersion, reason: prior.reason_code });
+      extraction = null; // re-read with the current prompt
+    }
 
     if (!extraction) {
       const dl = await books.downloadDocument(documentId);
@@ -61,10 +69,11 @@ async function processDocument(ctx, doc, prior) {
       if (rec.pages > config.claude.pageCap) return finish(STATUS.EXCEPTION, reason('PAGE_LIMIT', `${rec.pages} pages > cap ${config.claude.pageCap}`));
 
       const seen = await store.findByHash(hash);
-      if (seen && seen.extraction_json) {
+      if (seen && seen.extraction_json && seen.document_id !== documentId && (!promptVersion || seen.prompt_version === promptVersion)) {
         extraction = safeParse(seen.extraction_json);
         rec.extraction_json = seen.extraction_json;
         rec.model = seen.model;
+        rec.prompt_version = seen.prompt_version;
         logger.info('extraction.reused_by_hash', { document_id: documentId, from: seen.document_id });
       } else {
         try {
@@ -72,6 +81,7 @@ async function processDocument(ctx, doc, prior) {
           extraction = out.extraction;
           rec.extraction_json = JSON.stringify(extraction);
           rec.model = out.usage.model;
+          rec.prompt_version = promptVersion;
           rec.tokens_in = out.usages.reduce((s, u) => s + u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens, 0);
           rec.tokens_out = out.usages.reduce((s, u) => s + u.output_tokens, 0);
           result.cost_usd = out.usages.reduce((s, u) => s + estimateCostUsd(u), 0);

@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { RECORD_INVOICE_TOOL, normaliseExtraction } = require('./schema');
 
 /**
@@ -34,8 +35,11 @@ function buildContentBlock(buffer, mime) {
  * @param {object} deps.config   config.claude
  * @param {object} deps.logger
  */
+function promptVersionOf(text) { return crypto.createHash('sha256').update(text).digest('hex').slice(0, 12); }
+
 function createExtractor({ client, config, logger }) {
   const systemPrompt = loadPrompt();
+  const promptVersion = promptVersionOf(systemPrompt);
 
   async function callModel(model, buffer, mime) {
     const system = config.promptCache
@@ -94,7 +98,7 @@ function createExtractor({ client, config, logger }) {
     return { extraction: result.extraction, usage: result.usage, usages };
   }
 
-  return { extract };
+  return { extract, promptVersion };
 }
 
 /** Rough USD estimate for reporting; prices are config-free constants updated by hand. */
@@ -112,4 +116,4 @@ function estimateCostUsd(usage) {
   return (inTok * p.in + (usage.cache_read_input_tokens || 0) * p.cacheRead + (usage.output_tokens || 0) * p.out) / 1e6;
 }
 
-module.exports = { createExtractor, estimateCostUsd, loadPrompt };
+module.exports = { createExtractor, estimateCostUsd, loadPrompt, promptVersionOf };
