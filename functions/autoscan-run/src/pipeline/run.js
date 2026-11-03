@@ -56,7 +56,7 @@ async function runAutoscan(deps) {
 
     logger.info('run.scan', { inbox: inbox.length, known: known.size, new: newDocs.length, retry: retryRecords.length, dry_run: config.run.dryRun });
 
-    const ctx = { config, books, extractor, store, logger, terms, runId, now };
+    const ctx = { config, books, extractor, store, logger, terms, runId, now, claims: new Map() };
 
     // 3. pass A — new documents first, always
     const passA = await mapWithConcurrency(newDocs, config.run.concurrency, (d) => processDocument(ctx, d, null), { shouldStop });

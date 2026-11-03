@@ -113,7 +113,16 @@ async function processDocument(ctx, doc, prior) {
     result.po = { number: po.purchaseorder_number, total: po.total, vendor: po.vendor_name, strategy };
 
     // ---------------------------------------------------------------- 3. dedupe (supplier invoice no. per vendor)
+    //    a) against Books; b) against documents claimed earlier in THIS run (two copies in one batch)
+    let claimKey = null;
     if (extraction.invoice_number) {
+      claimKey = `${po.vendor_id}|${String(extraction.invoice_number).trim().toLowerCase()}`;
+      const claims = ctx.claims || (ctx.claims = new Map());
+      const holder = claims.get(claimKey);
+      if (holder && holder !== documentId) {
+        return finish(STATUS.DUPLICATE, reason('DUPLICATE', `same supplier invoice number as document ${holder} in this run`), {});
+      }
+      claims.set(claimKey, documentId); // claim synchronously, BEFORE the first await, so parallel workers see it
       const dupes = await books.searchBills({ vendor_id: po.vendor_id, bill_number: extraction.invoice_number });
       const exact = dupes.find((b) => String(b.bill_number).toLowerCase() === String(extraction.invoice_number).toLowerCase());
       if (exact) {

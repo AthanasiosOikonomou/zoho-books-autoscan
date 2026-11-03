@@ -186,3 +186,16 @@ test('a prompt change re-reads extraction-related exceptions but not total misma
   await runAutoscan({ config, books: books.api, extractor: ex, store, mailer: m, logger, now: () => new Date(t0.getTime() + 60000) });
   assert.deepEqual(ex.seen.slice(2), ['d11'], 'only the NO_PO_REF document was re-read');
 });
+
+test('two copies of the same invoice in one batch: one bill, the other DUPLICATE, never a Books error', async () => {
+  const books = fakeBooks({ docs: [
+    { document_id: 'd20', file_name: 'copy1.pdf', transactions: [] },
+    { document_id: 'd21', file_name: 'copy2.pdf', transactions: [] },
+  ], pos });
+  const ex = fakeExtractor({ d20: { po_reference: 'PO-00001', gross: 120, override: { invoice_number: 'SAME-1' } }, d21: { po_reference: 'PO-00001', gross: 120, override: { invoice_number: 'SAME-1' } } });
+  const store = new JsonFileStore(); const m = mailer();
+  const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store, mailer: m, logger });
+  const statuses = r.results.map((x) => x.status).sort();
+  assert.deepEqual(statuses, [STATUS.BILLED, STATUS.DUPLICATE]);
+  assert.equal(books.state.created.length, 1);
+});
