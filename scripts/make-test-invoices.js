@@ -10,11 +10,11 @@
  *
  * Upload the PDFs to the sandbox Documents inbox (drag & drop, or email them
  * to the sandbox inbox address), then run scripts/local-run.js.
- * Requires: npm i -D pdfkit (in functions/autoscan-run).
+ * Requires: npm install at the repo root (pdfkit).
  */
 const fs = require('fs');
 const path = require('path');
-const PDFDocument = require(path.join(__dirname, '..', 'functions', 'autoscan-run', 'node_modules', 'pdfkit'));
+const PDFDocument = require('pdfkit');
 
 const seedPath = path.join(__dirname, '..', 'seed', 'seed-output.json');
 if (!fs.existsSync(seedPath)) { console.error('Run scripts/seed-sandbox.js first.'); process.exit(2); }

@@ -11,3 +11,4 @@ out/
 .autoscan-state.json
 seed/seed-output.json
 seed/invoices/
+docs/

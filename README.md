@@ -21,22 +21,22 @@ Zoho Books supplier-invoice → bill automation, running on **Zoho Catalyst** (E
 ## Setup (sandbox)
 
 ```bash
-cd functions/autoscan-run && npm install && npm i -D pdfkit && cd ../..
+npm install            # root tooling + (postinstall) the function's own dependencies
 cp .env.example .env
 ```
 
 1. **Books token** — api-console.zoho.eu → Self Client → Generate Code, scope `ZohoBooks.fullaccess.all`, 10 min. Fill `BOOKS_CLIENT_ID/SECRET` in `.env`, then
-   `node scripts/books-token.js <code>` → paste `BOOKS_REFRESH_TOKEN` into `.env`.
-2. **Pick the sandbox org** — `node scripts/books-probe.js orgs` → set `BOOKS_ORG_ID` *and* `SEED_ALLOW_ORG_ID` to the sandbox id. `node scripts/books-probe.js` to confirm (terms, inbox, POs).
+   `npm run token -- <code>` → paste `BOOKS_REFRESH_TOKEN` into `.env`.
+2. **Pick the sandbox org** — `npm run probe -- orgs` → set `BOOKS_ORG_ID` *and* `SEED_ALLOW_ORG_ID` to the sandbox id. `npm run probe` to confirm (terms, inbox, POs).
 3. **Claude key** — create it in the client's Anthropic Console workspace → `ANTHROPIC_API_KEY`. Set `CLAUDE_MODEL` to the current Haiku id.
-4. **Seed** — `node scripts/seed-sandbox.js --plan` then `node scripts/seed-sandbox.js` (vendors, items, POs for every scenario). Then in the Books UI create the vendor custom fields *Carriage Rule* / *Carriage Tolerance* (Phase 2).
-5. **Test invoices** — `node scripts/make-test-invoices.js` → `seed/invoices/*.pdf` + `manifest.json` (expected outcome per file). Upload them to the sandbox Documents inbox.
-6. **Run** — `node scripts/local-run.js` (dry-run; report written to `out/`). Repeat: known documents are not re-read. `--live` requires `DRY_RUN=false` in `.env`.
+4. **Seed** — `npm run seed -- --plan` then `npm run seed` (vendors, items, POs for every scenario). Then in the Books UI create the vendor custom fields *Carriage Rule* / *Carriage Tolerance* (Phase 2).
+5. **Test invoices** — `npm run invoices` → `seed/invoices/*.pdf` + `manifest.json` (expected outcome per file). Upload them to the sandbox Documents inbox.
+6. **Run** — `npm run run` (dry-run; report written to `out/`). Repeat: known documents are not re-read. `--live` requires `DRY_RUN=false` in `.env`.
 
 ## Tests
 
 ```bash
-cd functions/autoscan-run && npm test
+npm test
 ```
 
 The pipeline tests prove with fakes: new documents processed first; exceptions never re-extracted and only retried after `RETRY_AFTER_HOURS`; dry-run writes nothing; duplicate supplier invoice numbers are never billed twice; a PO with an existing bill still gets a new bill for a different invoice; same file re-uploaded reuses the extraction.
