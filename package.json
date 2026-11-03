@@ -17,7 +17,9 @@
     "seed": "node scripts/seed-sandbox.js",
     "invoices": "node scripts/make-test-invoices.js",
     "run": "node scripts/local-run.js",
-    "claude-check": "node scripts/claude-check.js"
+    "claude-check": "node scripts/claude-check.js",
+    "catalyst-config": "node scripts/catalyst-config.js",
+    "deploy": "node scripts/catalyst-config.js && catalyst deploy --only functions"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",

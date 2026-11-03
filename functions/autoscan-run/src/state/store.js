@@ -94,18 +94,24 @@ class JsonFileStore {
 
 // ------------------------------------------------------------------ Catalyst Data Store
 /**
- * Tables (create in Catalyst console, Development env first):
+ * Tables — see docs/catalyst-setup.md for the exact column list to create in the console.
  *
- * document_state: document_id (Text, unique), file_hash (Text), file_name (Text), mime (Text), pages (Int),
- *   status (Text), reason_code (Text), reason_text (Text), attempts (Int), first_seen (DateTime),
- *   last_attempt (DateTime), vendor_id (Text), vendor_name (Text), po_id (Text), po_number (Text),
- *   bill_id (Text), bill_number (Text), invoice_number (Text), invoice_date (Text), invoice_gross (Double),
- *   extraction_json (Text, max length), prompt_version (Text), model (Text), tokens_in (Int), tokens_out (Int), run_id (Text), claimed_run_id (Text)
- *
- * run_log: run_id (Text, unique), started (DateTime), finished (DateTime), status (Text), docs_seen (Int),
- *   new_count (Int), billed (Int), exceptions (Int), retried (Int), errors (Int), books_calls (Int),
- *   claude_calls (Int), tokens_in (Int), tokens_out (Int), est_cost_usd (Double), report_sent (Boolean), notes (Text)
+ * Facts this adapter respects (Catalyst limits):
+ *  - ZCQL SELECT allows at most 20 columns → explicit column lists, never SELECT *
+ *  - `text` columns hold 10,000 chars → extraction_json is trimmed (line items dropped) if larger
+ *  - DateTime columns take 'YYYY-MM-DD HH:mm:ss'; we store UTC and convert both ways
+ *  - ZCQL results are wrapped as { table_name: {...} }
  */
+const DOC_READ_COLUMNS = [
+  'ROWID', 'document_id', 'file_hash', 'file_name', 'mime', 'pages', 'status', 'reason_code', 'reason_text',
+  'attempts', 'first_seen', 'last_attempt', 'vendor_id', 'po_id', 'bill_id', 'bill_number', 'invoice_number',
+  'extraction_json', 'prompt_version', 'model',
+]; // 20 — the ZCQL maximum
+const DOC_DATETIME_FIELDS = ['first_seen', 'last_attempt'];
+const RUN_DATETIME_FIELDS = ['started', 'finished'];
+const RUN_READ_COLUMNS = ['ROWID', 'run_id', 'started', 'finished', 'status', 'notes'];
+const TEXT_MAX = 9900;
+
 class CatalystStore {
   constructor({ app, logger }) {
     this.app = app;
@@ -117,35 +123,56 @@ class CatalystStore {
 
   _esc(v) { return String(v).replace(/'/g, "''"); }
 
-  async _query(sql) {
+  async _query(sql, table) {
     const rows = await this.zcql.executeZCQLQuery(sql);
-    // ZCQL wraps each row as { TableName: {...} }
-    return rows.map((r) => r.document_state || r.run_log || Object.values(r)[0]);
+    return rows.map((r) => r[table] || Object.values(r)[0]).filter(Boolean);
+  }
+
+  _fromRow(r, dateFields) {
+    const out = { ...r };
+    for (const f of dateFields) if (out[f]) out[f] = fromZcqlDateTime(out[f]);
+    if (out.attempts !== undefined && out.attempts !== null) out.attempts = Number(out.attempts);
+    return out;
+  }
+
+  _toRow(record, fields, dateFields) {
+    const row = {};
+    for (const f of fields) if (record[f] !== undefined && record[f] !== null) row[f] = record[f];
+    for (const f of dateFields) if (row[f]) row[f] = toZcqlDateTime(row[f]);
+    if (typeof row.extraction_json === 'string' && row.extraction_json.length > TEXT_MAX) {
+      try {
+        const e = JSON.parse(row.extraction_json);
+        e.line_items = [];
+        e.notes = `${e.notes || ''} [line items dropped: stored JSON exceeded ${TEXT_MAX} chars]`.trim();
+        row.extraction_json = JSON.stringify(e).slice(0, TEXT_MAX);
+      } catch { row.extraction_json = row.extraction_json.slice(0, TEXT_MAX); }
+    }
+    for (const k of Object.keys(row)) if (typeof row[k] === 'string' && row[k].length > TEXT_MAX) row[k] = row[k].slice(0, TEXT_MAX);
+    return row;
   }
 
   async getByDocumentIds(ids) {
     const m = new Map();
     for (let i = 0; i < ids.length; i += 50) {
       const chunk = ids.slice(i, i + 50).map((id) => `'${this._esc(id)}'`).join(',');
-      const rows = await this._query(`SELECT * FROM document_state WHERE document_id IN (${chunk})`);
-      for (const r of rows) { this.rowIds.set(r.document_id, r.ROWID); m.set(r.document_id, r); }
+      const rows = await this._query(`SELECT ${DOC_READ_COLUMNS.join(', ')} FROM document_state WHERE document_id IN (${chunk})`, 'document_state');
+      for (const r of rows) { this.rowIds.set(r.document_id, r.ROWID); m.set(String(r.document_id), this._fromRow(r, DOC_DATETIME_FIELDS)); }
     }
     return m;
   }
 
   async findByHash(hash) {
     if (!hash) return null;
-    const rows = await this._query(`SELECT * FROM document_state WHERE file_hash = '${this._esc(hash)}' AND extraction_json IS NOT NULL LIMIT 1`);
-    return rows[0] || null;
+    const rows = await this._query(`SELECT ${DOC_READ_COLUMNS.join(', ')} FROM document_state WHERE file_hash = '${this._esc(hash)}' AND extraction_json IS NOT NULL LIMIT 1`, 'document_state');
+    return rows[0] ? this._fromRow(rows[0], DOC_DATETIME_FIELDS) : null;
   }
 
   async upsert(record) {
     const table = this.ds.table('document_state');
-    const row = {};
-    for (const f of DOCUMENT_FIELDS) if (record[f] !== undefined) row[f] = record[f];
+    const row = this._toRow(record, DOCUMENT_FIELDS, DOC_DATETIME_FIELDS);
     let rowId = this.rowIds.get(record.document_id);
     if (!rowId) {
-      const existing = await this._query(`SELECT ROWID, document_id FROM document_state WHERE document_id = '${this._esc(record.document_id)}' LIMIT 1`);
+      const existing = await this._query(`SELECT ROWID, document_id FROM document_state WHERE document_id = '${this._esc(record.document_id)}' LIMIT 1`, 'document_state');
       if (existing[0]) rowId = existing[0].ROWID;
     }
     if (rowId) {
@@ -160,34 +187,42 @@ class CatalystStore {
 
   async listRetryCandidates({ olderThan, maxAttempts, limit }) {
     const cutoff = toZcqlDateTime(olderThan);
-    const sql = `SELECT * FROM document_state WHERE (status = 'EXCEPTION' OR status = 'BILLED_NO_ATTACH' OR status = 'WOULD_BILL') AND attempts < ${Number(maxAttempts)} AND last_attempt <= '${cutoff}' ORDER BY last_attempt ASC LIMIT ${Number(limit)}`;
-    const rows = await this._query(sql);
+    const sql = `SELECT ${DOC_READ_COLUMNS.join(', ')} FROM document_state WHERE (status = 'EXCEPTION' OR status = 'BILLED_NO_ATTACH' OR status = 'WOULD_BILL') AND attempts < ${Number(maxAttempts)} AND last_attempt <= '${cutoff}' ORDER BY last_attempt ASC LIMIT ${Number(limit)}`;
+    const rows = await this._query(sql, 'document_state');
     for (const r of rows) this.rowIds.set(r.document_id, r.ROWID);
-    return rows;
+    return rows.map((r) => this._fromRow(r, DOC_DATETIME_FIELDS));
   }
 
   async getActiveRun({ staleMinutes, now = Date.now() }) {
     const since = toZcqlDateTime(new Date(now - staleMinutes * 60000));
-    const rows = await this._query(`SELECT * FROM run_log WHERE status = 'RUNNING' AND started >= '${since}' LIMIT 1`);
-    return rows[0] || null;
+    const rows = await this._query(`SELECT ${RUN_READ_COLUMNS.join(', ')} FROM run_log WHERE status = 'RUNNING' AND started >= '${since}' LIMIT 1`, 'run_log');
+    return rows[0] ? this._fromRow(rows[0], RUN_DATETIME_FIELDS) : null;
   }
 
   async beginRun(run) {
-    const inserted = await this.ds.table('run_log').insertRow({ ...run, status: 'RUNNING' });
+    const row = this._toRow({ ...run, status: 'RUNNING' }, RUN_FIELDS, RUN_DATETIME_FIELDS);
+    const inserted = await this.ds.table('run_log').insertRow(row);
     return { ...run, status: 'RUNNING', ROWID: inserted.ROWID };
   }
 
   async endRun(run) {
-    await this.ds.table('run_log').updateRow({ ROWID: run.ROWID, ...stripRowId(run) });
+    const row = this._toRow(run, RUN_FIELDS, RUN_DATETIME_FIELDS);
+    await this.ds.table('run_log').updateRow({ ROWID: run.ROWID, ...row });
     return run;
   }
 }
 
-function stripRowId(o) { const { ROWID, ...rest } = o; return rest; }
+const RUN_FIELDS = ['run_id', 'started', 'finished', 'status', 'docs_seen', 'new_count', 'billed', 'exceptions', 'retried', 'errors', 'books_calls', 'claude_calls', 'tokens_in', 'tokens_out', 'est_cost_usd', 'report_sent', 'notes'];
+
 function toZcqlDateTime(d) {
   const x = new Date(d);
   const p = (n) => String(n).padStart(2, '0');
   return `${x.getUTCFullYear()}-${p(x.getUTCMonth() + 1)}-${p(x.getUTCDate())} ${p(x.getUTCHours())}:${p(x.getUTCMinutes())}:${p(x.getUTCSeconds())}`;
 }
+function fromZcqlDateTime(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(String(s));
+  if (!m) return String(s);
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])).toISOString();
+}
 
-module.exports = { STATUS, TERMINAL, RETRYABLE, DOCUMENT_FIELDS, JsonFileStore, CatalystStore, toZcqlDateTime };
+module.exports = { STATUS, TERMINAL, RETRYABLE, DOCUMENT_FIELDS, RUN_FIELDS, DOC_READ_COLUMNS, JsonFileStore, CatalystStore, toZcqlDateTime, fromZcqlDateTime };

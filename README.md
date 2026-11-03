@@ -43,13 +43,13 @@ The pipeline tests prove with fakes: new documents processed first; exceptions n
 
 ## Deploy (Catalyst, Development env)
 
+See [`docs/catalyst-setup.md`](docs/catalyst-setup.md) for the one-time setup (CLI, `catalyst init`, Data Store tables, Mail sender, cron). After that:
+
 ```bash
-catalyst login
-catalyst init          # choose the existing client project, Development
-catalyst deploy --only functions
+npm run deploy        # generates functions/autoscan-run/catalyst-config.json from .env (env vars ride inside it) and deploys the function
 ```
 
-Then in the console: Data Store tables `document_state` and `run_log` (columns in `src/state/store.js`), environment variables from `.env.example` (never `.env` itself), a verified Mail sender, and a Cron `autoscan-every-30m` → job `autoscan-run`, Mon–Fri 07:00–19:00 Europe/London.
+`catalyst-config.json` is git-ignored because it carries the real environment variables; `catalyst-config.example.json` is the committed template.
 
 ## Rules
 
