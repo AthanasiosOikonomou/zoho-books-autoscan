@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.catalystrc
+.build/
+coverage/
+*.log
+.DS_Store
+out/
+.autoscan-state.json
+seed/seed-output.json
+seed/invoices/

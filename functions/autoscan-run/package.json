@@ -1,0 +1,23 @@
+{
+  "name": "autoscan-run",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zoho Books supplier-invoice → bill automation (Catalyst job)",
+  "author": { "name": "Sakis Oikonomou" },
+  "main": "src/index.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test test/",
+    "run:local": "node ../../scripts/local-run.js",
+    "seed": "node ../../scripts/seed-sandbox.js",
+    "probe": "node ../../scripts/books-probe.js",
+    "token": "node ../../scripts/books-token.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "zcatalyst-sdk-node": "^1.4.0"
+  },
+  "devDependencies": {
+    "dotenv": "^16.4.5"
+  }
+}
