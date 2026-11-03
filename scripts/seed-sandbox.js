@@ -78,6 +78,8 @@ const POS = [
     ] },
   { key: 'nopo', vendor: 'harlow', number: null, reference: null, lines: [['tape', 2]], carriage: 0,
     invoices: [{ suffix: 'A', label: 'Invoice without any PO reference → NO_PO_REF', refStyle: 'none', lines: 'all', carriage: 0 }] },
+  { key: 'terms', vendor: 'harlow', number: null, reference: null, lines: [['roller', 3]], carriage: 0,
+    invoices: [{ suffix: 'A', label: 'Exact match; bill must inherit the PO payment terms (Net 60)', refStyle: 'zoho', lines: 'all', carriage: 0 }] },
 ];
 
 (async () => {
@@ -201,9 +203,16 @@ const POS = [
       console.log(`! ${p.key}: ${extras.length} duplicate PO(s) ${extras.map((e) => e.purchaseorder_number).join(', ')} — run with --prune to delete`);
     }
 
-    if (po && reset) {
-      po = (await books.request(`/purchaseorders/${po.purchaseorder_id}`, { method: 'PUT', json: body })).purchaseorder;
-      console.log(`~ PO ${po.purchaseorder_number} ${p.key} rewritten: sub_total=${po.sub_total} tax=${po.tax_total} total=${po.total}`);
+    if (po && reset && ['billed', 'partially_billed'].includes(String(po.billed_status || '').toLowerCase())) {
+      console.log(`= PO ${po.purchaseorder_number} ${p.key} is ${po.billed_status} — left untouched (Books forbids edits)`);
+    } else if (po && reset) {
+      try {
+        po = (await books.request(`/purchaseorders/${po.purchaseorder_id}`, { method: 'PUT', json: body })).purchaseorder;
+        console.log(`~ PO ${po.purchaseorder_number} ${p.key} rewritten: sub_total=${po.sub_total} tax=${po.tax_total} total=${po.total}`);
+      } catch (err) {
+        if (err.booksCode === 36023) console.log(`= PO ${po.purchaseorder_number} ${p.key} is billed — left untouched`);
+        else throw err;
+      }
     } else if (!po) {
       po = (await books.request('/purchaseorders', { method: 'POST', json: body })).purchaseorder;
       console.log(`+ PO ${po.purchaseorder_number} ${p.key} ref=${p.reference || '-'} sub_total=${po.sub_total} tax=${po.tax_total} total=${po.total}`);
