@@ -22,7 +22,7 @@ const seed = JSON.parse(fs.readFileSync(seedPath, 'utf8'));
 const outDir = path.join(__dirname, '..', 'seed', 'invoices');
 fs.mkdirSync(outDir, { recursive: true });
 
-const VAT = 0.20;
+const VAT = ((seed.tax && seed.tax.percentage) || 20) / 100;
 const manifest = [];
 let seq = 480000;
 
@@ -47,7 +47,9 @@ for (const [key, po] of Object.entries(seed.pos)) {
     const file = `${key}-${inv.suffix}.pdf`;
     renderInvoice(path.join(outDir, file), { vendor, po, inv, lines, net, carriage, vat, gross, invoiceNumber, ref });
     manifest.push({ file, po_key: key, suffix: inv.suffix, label: inv.label, vendor: vendor.name, po_number: po.number, po_reference: po.reference, printed_ref: ref, invoice_number: invoiceNumber, net, carriage, vat, gross, expected: expectedOutcome(inv, key) });
-    console.log(`${file.padEnd(24)} ${invoiceNumber.padEnd(14)} ref="${ref || ''}" gross=${gross.toFixed(2)}  ${inv.label}`);
+    const poTotal = Number(po.total || 0);
+    const flag = inv.lines === 'all' && !inv.priceDelta && Math.abs(gross - poTotal) <= 0.02 ? 'MATCH' : 'differs';
+    console.log(`${file.padEnd(24)} ${invoiceNumber.padEnd(14)} ref="${ref || ''}" gross=${gross.toFixed(2)} PO=${poTotal.toFixed(2)} ${flag.padEnd(7)} ${inv.label}`);
   }
 }
 fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2));

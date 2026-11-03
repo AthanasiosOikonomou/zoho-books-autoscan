@@ -6,8 +6,15 @@
  * every matching scenario, then write seed/seed-output.json which
  * scripts/make-test-invoices.js turns into PDF/JPG "supplier invoices".
  *
- *   node scripts/seed-sandbox.js            → create (idempotent by vendor/item name)
+ *   node scripts/seed-sandbox.js            → create (idempotent by vendor/item name and PO tag)
  *   node scripts/seed-sandbox.js --plan     → print the plan, touch nothing
+ *   node scripts/seed-sandbox.js --reset    → delete the seeded POs and recreate them (vendors/items kept)
+ *
+ * Facts this seed encodes (verified on the API):
+ *   - Books purchase orders have NO shipping-charge field, only `adjustment`.
+ *     Carriage is therefore a line item ("Carriage", service item), which is
+ *     also how suppliers print it.
+ *   - Every line carries a 20% VAT tax so PO totals are gross, like production.
  *
  * Refuses to run unless BOOKS_ORG_ID matches SEED_ALLOW_ORG_ID in .env
  * (a guard against seeding production by mistake).
@@ -74,6 +81,7 @@ const POS = [
 
 (async () => {
   const planOnly = process.argv.includes('--plan');
+  const reset = process.argv.includes('--reset');
   const config = loadConfig(process.env);
   if (!planOnly) {
     if (!config.books.orgId || config.books.orgId !== process.env.SEED_ALLOW_ORG_ID) {
@@ -110,6 +118,28 @@ const POS = [
     out.items[it.key] = { item_id: i.item_id, name: it.name, sku: it.sku, mpn: it.mpn, rate: it.rate };
   }
 
+  // tax: find a 20% tax or create one
+  const VAT_PCT = 20;
+  const taxes = (await books.request('/settings/taxes')).taxes || [];
+  let tax = taxes.find((t) => Number(t.tax_percentage) === VAT_PCT && (t.tax_type === 'tax' || !t.tax_type));
+  if (!tax) {
+    tax = (await books.request('/settings/taxes', { method: 'POST', json: { tax_name: `VAT ${VAT_PCT}%`, tax_percentage: VAT_PCT, tax_type: 'tax' } })).tax;
+    console.log(`+ tax ${tax.tax_name} (${tax.tax_id})`);
+  } else console.log(`= tax ${tax.tax_name} ${tax.tax_percentage}% (${tax.tax_id})`);
+  out.tax = { tax_id: tax.tax_id, name: tax.tax_name, percentage: VAT_PCT };
+
+  // carriage as a service item (POs have no shipping-charge field)
+  {
+    const name = 'Carriage';
+    const existing = (await books.request('/items', { query: { name } })).items || [];
+    let i = existing.find((x) => x.name === name);
+    if (!i) {
+      i = (await books.request('/items', { method: 'POST', json: { name, rate: 0, purchase_rate: 0, product_type: 'service', item_type: 'sales_and_purchases', purchase_description: 'Delivery / carriage charge' } })).item;
+      console.log(`+ item ${name} (${i.item_id})`);
+    } else console.log(`= item ${name} (${i.item_id})`);
+    out.items.carriage = { item_id: i.item_id, name, sku: null, mpn: null, rate: 0 };
+  }
+
   // purchase orders
   const today = new Date().toISOString().slice(0, 10);
   for (const p of POS) {
@@ -117,25 +147,21 @@ const POS = [
     const tag = `[seed:${p.key}]`;
     const existing = (await books.request('/purchaseorders', { query: { vendor_id: vendor.contact_id } })).purchaseorders || [];
     let po = existing.find((x) => (x.notes || '').includes(tag) || (x.reference_number || '') === tag);
+    if (po && reset) {
+      await books.request(`/purchaseorders/${po.purchaseorder_id}`, { method: 'DELETE' });
+      console.log(`- PO ${po.purchaseorder_number} ${p.key} deleted (reset)`);
+      po = null;
+    }
     if (!po) {
-      const line_items = p.lines.map(([k, q]) => ({ item_id: out.items[k].item_id, quantity: q, rate: out.items[k].rate }));
-      const body = { vendor_id: vendor.contact_id, date: today, reference_number: p.reference || undefined, line_items, notes: `AutoScan test PO ${tag}` };
-      if (p.carriage) body.shipping_charge = p.carriage;
-      try {
-        po = (await books.request('/purchaseorders', { method: 'POST', json: body })).purchaseorder;
-      } catch (err) {
-        if (p.carriage && /shipping/i.test(err.message)) {
-          delete body.shipping_charge;
-          body.line_items.push({ name: 'Carriage', description: 'Delivery charge', rate: p.carriage, quantity: 1 });
-          po = (await books.request('/purchaseorders', { method: 'POST', json: body })).purchaseorder;
-          console.log('  (shipping_charge not accepted on PO — carriage added as a line item)');
-        } else throw err;
-      }
-      console.log(`+ PO ${po.purchaseorder_number} ${p.key} ref=${p.reference || '-'} total=${po.total}`);
-    } else console.log(`= PO ${po.purchaseorder_number} ${p.key}`);
+      const line_items = p.lines.map(([k, q]) => ({ item_id: out.items[k].item_id, quantity: q, rate: out.items[k].rate, tax_id: tax.tax_id }));
+      if (p.carriage) line_items.push({ item_id: out.items.carriage.item_id, description: 'Delivery charge', quantity: 1, rate: p.carriage, tax_id: tax.tax_id });
+      const body = { vendor_id: vendor.contact_id, date: today, reference_number: p.reference || undefined, line_items, is_inclusive_tax: false, notes: `AutoScan test PO ${tag}` };
+      po = (await books.request('/purchaseorders', { method: 'POST', json: body })).purchaseorder;
+      console.log(`+ PO ${po.purchaseorder_number} ${p.key} ref=${p.reference || '-'} sub_total=${po.sub_total} tax=${po.tax_total} total=${po.total}`);
+    } else console.log(`= PO ${po.purchaseorder_number} ${p.key} total=${po.total}`);
     out.pos[p.key] = {
       purchaseorder_id: po.purchaseorder_id, number: po.purchaseorder_number, reference: p.reference, vendor: p.vendor,
-      total: po.total, sub_total: po.sub_total, tax_total: po.tax_total, shipping_charge: po.shipping_charge,
+      total: po.total, sub_total: po.sub_total, tax_total: po.tax_total,
       lines: p.lines.map(([k, q]) => ({ item: k, mpn: out.items[k].mpn, name: out.items[k].name, qty: q, rate: out.items[k].rate })),
       carriage: p.carriage, invoices: p.invoices,
     };
