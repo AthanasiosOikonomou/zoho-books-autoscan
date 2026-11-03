@@ -7,6 +7,8 @@
  *   node scripts/local-run.js            → DRY-RUN (default, never writes to Books)
  *   node scripts/local-run.js --live     → writes to Books; ALSO requires DRY_RUN=false in .env
  *   node scripts/local-run.js --limit 5  → cap new documents this run
+ *   node scripts/local-run.js --retry-now → re-check EXCEPTION docs now instead of after RETRY_AFTER_HOURS (no AI cost)
+ *   node scripts/local-run.js --reset-state → forget everything seen (next run re-extracts: costs AI calls)
  *
  * State is kept in STATE_FILE (default ./.autoscan-state.json) so repeated
  * local runs behave exactly like production (no re-reading of files).
@@ -30,6 +32,8 @@ const { runAutoscan } = fn('pipeline/run');
   const live = args.includes('--live');
   const limitIdx = args.indexOf('--limit');
   const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) : null;
+  const retryNow = args.includes('--retry-now');
+  const resetState = args.includes('--reset-state');
 
   const config = assertRuntimeConfig(loadConfig(process.env));
   if (live && config.run.dryRun) {
@@ -38,6 +42,8 @@ const { runAutoscan } = fn('pipeline/run');
   }
   if (!live) config.run.dryRun = true; // belt and braces
   if (limit) config.run.maxNewPerRun = limit;
+  if (retryNow) { config.run.retryAfterHours = 0; config.run.maxAttempts = 999; }
+  if (resetState) { try { require('fs').unlinkSync(path.resolve(config.local.stateFile)); console.log('State file removed.'); } catch { /* none */ } }
 
   const logger = createLogger({ level: process.env.LOG_LEVEL || 'info' });
   const tokenProvider = createTokenProvider(config.books);

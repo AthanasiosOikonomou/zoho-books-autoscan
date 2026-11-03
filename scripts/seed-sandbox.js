@@ -8,7 +8,7 @@
  *
  *   node scripts/seed-sandbox.js            → create (idempotent by vendor/item name and PO tag)
  *   node scripts/seed-sandbox.js --plan     → print the plan, touch nothing
- *   node scripts/seed-sandbox.js --reset    → delete the seeded POs and recreate them (vendors/items kept)
+ *   node scripts/seed-sandbox.js --reset    → rewrite the seeded POs in place (same numbers; vendors/items kept)
  *
  * Facts this seed encodes (verified on the API):
  *   - Books purchase orders have NO shipping-charge field, only `adjustment`.
@@ -120,7 +120,16 @@ const POS = [
 
   // tax: find a 20% tax or create one
   const VAT_PCT = 20;
-  const taxes = (await books.request('/settings/taxes')).taxes || [];
+  let taxes;
+  try {
+    taxes = (await books.request('/settings/taxes')).taxes || [];
+  } catch (err) {
+    if (/sales tax|110817/i.test(err.message)) {
+      console.error('\nVAT is disabled in this org. In the SANDBOX UI: Settings → Taxes → VAT Settings → mark the business as VAT registered, then re-run.');
+      process.exit(2);
+    }
+    throw err;
+  }
   let tax = taxes.find((t) => Number(t.tax_percentage) === VAT_PCT && (t.tax_type === 'tax' || !t.tax_type));
   if (!tax) {
     tax = (await books.request('/settings/taxes', { method: 'POST', json: { tax_name: `VAT ${VAT_PCT}%`, tax_percentage: VAT_PCT, tax_type: 'tax' } })).tax;
@@ -147,15 +156,13 @@ const POS = [
     const tag = `[seed:${p.key}]`;
     const existing = (await books.request('/purchaseorders', { query: { vendor_id: vendor.contact_id } })).purchaseorders || [];
     let po = existing.find((x) => (x.notes || '').includes(tag) || (x.reference_number || '') === tag);
+    const line_items = p.lines.map(([k, q]) => ({ item_id: out.items[k].item_id, quantity: q, rate: out.items[k].rate, tax_id: tax.tax_id }));
+    if (p.carriage) line_items.push({ item_id: out.items.carriage.item_id, description: 'Delivery charge', quantity: 1, rate: p.carriage, tax_id: tax.tax_id });
+    const body = { vendor_id: vendor.contact_id, date: today, reference_number: p.reference || undefined, line_items, is_inclusive_tax: false, notes: `AutoScan test PO ${tag}` };
     if (po && reset) {
-      await books.request(`/purchaseorders/${po.purchaseorder_id}`, { method: 'DELETE' });
-      console.log(`- PO ${po.purchaseorder_number} ${p.key} deleted (reset)`);
-      po = null;
-    }
-    if (!po) {
-      const line_items = p.lines.map(([k, q]) => ({ item_id: out.items[k].item_id, quantity: q, rate: out.items[k].rate, tax_id: tax.tax_id }));
-      if (p.carriage) line_items.push({ item_id: out.items.carriage.item_id, description: 'Delivery charge', quantity: 1, rate: p.carriage, tax_id: tax.tax_id });
-      const body = { vendor_id: vendor.contact_id, date: today, reference_number: p.reference || undefined, line_items, is_inclusive_tax: false, notes: `AutoScan test PO ${tag}` };
+      po = (await books.request(`/purchaseorders/${po.purchaseorder_id}`, { method: 'PUT', json: body })).purchaseorder;
+      console.log(`~ PO ${po.purchaseorder_number} ${p.key} rewritten: sub_total=${po.sub_total} tax=${po.tax_total} total=${po.total}`);
+    } else if (!po) {
       po = (await books.request('/purchaseorders', { method: 'POST', json: body })).purchaseorder;
       console.log(`+ PO ${po.purchaseorder_number} ${p.key} ref=${p.reference || '-'} sub_total=${po.sub_total} tax=${po.tax_total} total=${po.total}`);
     } else console.log(`= PO ${po.purchaseorder_number} ${p.key} total=${po.total}`);

@@ -28,7 +28,7 @@ function createLogger({ runId = '-', level = 'info', sink = console } = {}) {
   };
 }
 
-const SECRET_KEYS = /token|secret|key|authorization|password/i;
+const SECRET_KEYS = /(access_token|refresh_token|api_?key|client_secret|secret|authorization|password)$/i;
 function scrub(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
