@@ -7,28 +7,25 @@ One-time setup to run `autoscan-run` on a schedule in the client's Catalyst proj
 ```bash
 npm i -g zcatalyst-cli
 catalyst login --force --dc eu      # browser login as the user invited to the client's project (--force replaces any other login)
-catalyst whoami
-catalyst token:generate             # → CATALYST_TOKEN=... in .env ; deploys then use this identity even if the global login changes
+catalyst whoami                     # must show that user, not another account
 ```
 
-The CLI holds one global login. With `CATALYST_TOKEN` in `.env`, `npm run deploy` passes `--token` on every command, so you can log the CLI back into another project afterwards (`catalyst login --force`) without breaking this repo.
+The CLI holds **one** global login. Switching to another project later = `catalyst login --force` again. Optional: `catalyst token:generate` → `CATALYST_TOKEN=...` in `.env` makes `npm run deploy` pass `--token`, so this repo keeps deploying as this user even after the global login changes.
 
 ## 2. Link this repo to the project
 
-`catalyst init` is interactive and insists on creating a function. Let it create a throwaway one, then point it at ours:
+`catalyst.json` (which function to deploy) is committed. `catalyst init` only has to write `.catalystrc` (org / project / environment ids — git-ignored):
 
 ```bash
 cd ~/repos/<this repo>
 catalyst init
 #   organization → the client's
-#   project      → the client's existing project (pick from the list; do NOT create a new one)
-#   features     → Functions only
-#   function     → type: Job, runtime: Node 20, name: tmp_init  (anything — it gets deleted)
-#   install deps → No
-rm -rf functions/tmp_init
+#   project      → the client's existing project (pick it from the list; never "create a new project")
+#   features     → select NOTHING, just press Enter (if it insists: Functions → Job → NodeJS 20 → name tmp_init → install deps No,
+#                  then rm -rf functions/tmp_init)
+git checkout catalyst.json          # in case init rewrote it
+git status                          # only .catalystrc may be new (and it is ignored) — nothing else should have changed
 ```
-
-Then edit `catalyst.json` → `functions.targets` to `["autoscan-run"]` (keep `"source": "functions"`). `.catalystrc` now holds the project/env ids — it is git-ignored, keep it that way.
 
 ## 3. Data Store tables
 

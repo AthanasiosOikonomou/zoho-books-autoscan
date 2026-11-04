@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "targets": ["autoscan-run"],
+    "ignore": [],
+    "source": "functions"
+  }
+}
