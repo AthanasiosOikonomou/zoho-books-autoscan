@@ -53,6 +53,7 @@ async function runAutoscan(deps) {
     const retryRecords = (await store.listRetryCandidates({
       olderThan: new Date(startedAt.getTime() - config.run.retryAfterHours * 3600000),
       transientOlderThan: new Date(startedAt.getTime() - (config.run.retryTransientAfterMinutes || 0) * 60000),
+      staleOlderThan: new Date(startedAt.getTime() - config.run.lockStaleMinutes * 60000),
       maxAttempts: config.run.maxAttempts,
       limit: config.run.maxRetryPerRun,
     })).filter((r) => byId.has(String(r.document_id))); // must still be in the inbox

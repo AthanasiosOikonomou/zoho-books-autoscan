@@ -192,3 +192,14 @@ test('retry window: transient reasons (AI/Books/attach) are retried on the next 
   // attempts cap still applies to transient ones
   assert.deepEqual(ids(await store.listRetryCandidates({ olderThan: at(30 - 12 * 60), transientOlderThan: at(30), maxAttempts: 1, limit: 50 })), []);
 });
+
+test('retry window: a PROCESSING claim older than the lock window (dead run) is retried; a fresh one is not', async () => {
+  const store = new JsonFileStore();
+  const t0 = new Date('2026-11-04T10:00:00Z');
+  await store.upsert({ document_id: 'old', file_name: 'old.pdf', status: 'PROCESSING', attempts: 1, last_attempt: t0.toISOString(), first_seen: t0.toISOString() });
+  await store.upsert({ document_id: 'fresh', file_name: 'fresh.pdf', status: 'PROCESSING', attempts: 1, last_attempt: new Date(t0.getTime() + 20 * 60000).toISOString(), first_seen: t0.toISOString() });
+  const now = new Date(t0.getTime() + 25 * 60000);
+  const args = { olderThan: new Date(now - 12 * 3600000), transientOlderThan: now, staleOlderThan: new Date(now - 15 * 60000), maxAttempts: 5, limit: 50 };
+  assert.deepEqual((await store.listRetryCandidates(args)).map((r) => r.document_id), ['old']);
+  assert.deepEqual((await store.listRetryCandidates({ ...args, staleOlderThan: undefined })).map((r) => r.document_id), [], 'without a stale window PROCESSING rows are never retried');
+});

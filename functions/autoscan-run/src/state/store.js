@@ -11,7 +11,7 @@
  *   getByDocumentIds(ids)            → Map<document_id, record>
  *   findByHash(file_hash)            → record | null
  *   upsert(record)                   → record     (keyed by document_id)
- *   listRetryCandidates({olderThan, transientOlderThan?, maxAttempts, limit}) → record[]
+ *   listRetryCandidates({olderThan, transientOlderThan?, staleOlderThan?, maxAttempts, limit}) → record[]
  *   getActiveRun({staleMinutes})     → run | null
  *   beginRun(run)                    → run
  *   endRun(run)                      → run
@@ -68,13 +68,18 @@ class JsonFileStore {
     this._save();
     return merged;
   }
-  async listRetryCandidates({ olderThan, transientOlderThan, maxAttempts, limit }) {
+  async listRetryCandidates({ olderThan, transientOlderThan, staleOlderThan, maxAttempts, limit }) {
     const cutoff = new Date(olderThan).toISOString();
     const tCutoff = new Date(transientOlderThan || olderThan).toISOString();
+    const sCutoff = staleOlderThan ? new Date(staleOlderThan).toISOString() : null;
+    const window = (d) => {
+      if (d.status === STATUS.PROCESSING) return sCutoff; // a claim nobody finished (crashed run): retry once it is stale
+      return TRANSIENT_REASONS.has(d.reason_code) ? tCutoff : cutoff;
+    };
     return Object.values(this.data.documents)
-      .filter((d) => RETRYABLE.has(d.status))
+      .filter((d) => RETRYABLE.has(d.status) || (sCutoff && d.status === STATUS.PROCESSING))
       .filter((d) => (d.attempts || 0) < maxAttempts)
-      .filter((d) => !d.last_attempt || d.last_attempt <= (TRANSIENT_REASONS.has(d.reason_code) ? tCutoff : cutoff))
+      .filter((d) => !d.last_attempt || d.last_attempt <= window(d))
       .sort((a, b) => String(a.last_attempt).localeCompare(String(b.last_attempt)))
       .slice(0, limit);
   }
@@ -104,6 +109,10 @@ class JsonFileStore {
  *  - `text` columns hold 10,000 chars → extraction_json is trimmed (line items dropped) if larger
  *  - DateTime columns take 'YYYY-MM-DD HH:mm:ss'; we store UTC and convert both ways
  *  - ZCQL results are wrapped as { table_name: {...} }
+ *  - ROWIDs are 17-digit integers, above Number.MAX_SAFE_INTEGER. The insert/update REST responses carry ROWID as a
+ *    JSON *number*, so JSON.parse rounds it (…17003 → …17004) and a later update by that ROWID hits the wrong row or
+ *    none at all. ZCQL returns ROWID as a string, so after every insert the ROWID is re-read via ZCQL and never taken
+ *    from the insert response.
  */
 const DOC_READ_COLUMNS = [
   'ROWID', 'document_id', 'file_hash', 'file_name', 'mime', 'pages', 'status', 'reason_code', 'reason_text',
@@ -159,7 +168,7 @@ class CatalystStore {
     for (let i = 0; i < ids.length; i += 50) {
       const chunk = ids.slice(i, i + 50).map((id) => `'${this._esc(id)}'`).join(',');
       const rows = await this._query(`SELECT ${DOC_READ_COLUMNS.join(', ')} FROM document_state WHERE document_id IN (${chunk})`, 'document_state');
-      for (const r of rows) { this.rowIds.set(r.document_id, r.ROWID); m.set(String(r.document_id), this._fromRow(r, DOC_DATETIME_FIELDS)); }
+      for (const r of rows) { this.rowIds.set(String(r.document_id), String(r.ROWID)); m.set(String(r.document_id), this._fromRow(r, DOC_DATETIME_FIELDS)); }
     }
     return m;
   }
@@ -176,15 +185,15 @@ class CatalystStore {
     let rowId = this.rowIds.get(record.document_id);
     if (!rowId) {
       const existing = await this._query(`SELECT ROWID, document_id FROM document_state WHERE document_id = '${this._esc(record.document_id)}' LIMIT 1`, 'document_state');
-      if (existing[0]) rowId = existing[0].ROWID;
+      if (existing[0]) rowId = String(existing[0].ROWID);
     }
     if (rowId) {
       const updated = await this._write('update', () => table.updateRow({ ROWID: String(rowId), ...row }), { document_id: record.document_id, status: row.status, rowid: String(rowId), columns: Object.keys(row).length });
       this._assertWritten(updated, 'document_state', rowId, row);
     } else {
       const inserted = await this._write('insert', () => table.insertRow(row), { document_id: record.document_id, status: row.status, columns: Object.keys(row).length });
-      rowId = inserted && inserted.ROWID;
-      if (!rowId) throw new Error(`document_state insert returned no ROWID: ${JSON.stringify(inserted).slice(0, 300)}`);
+      if (!inserted || !inserted.ROWID) throw new Error(`document_state insert returned no ROWID: ${String(JSON.stringify(inserted)).slice(0, 300)}`);
+      rowId = await this._exactRowId('document_state', `document_id = '${this._esc(record.document_id)}'`, inserted.ROWID);
     }
     this.rowIds.set(record.document_id, rowId);
     return { ...record, ROWID: rowId };
@@ -204,22 +213,33 @@ class CatalystStore {
     }
   }
 
-  /** The Data Store answers an update with the updated row; anything else means the row was NOT changed. */
+  /** Exact (string) ROWID of a row just inserted — read back through ZCQL, because the insert response's ROWID is a rounded JS number. */
+  async _exactRowId(table, where, roundedId) {
+    const rows = await this._query(`SELECT ROWID FROM ${table} WHERE ${where} LIMIT 1`, table);
+    const id = rows[0] && rows[0].ROWID !== undefined && rows[0].ROWID !== null ? String(rows[0].ROWID) : null;
+    if (!id) throw Object.assign(new Error(`${table}: inserted row not found by ${where}`), { code: 'CATALYST_DS' });
+    if (Number(id) !== Number(roundedId)) this.logger.warn('store.rowid_mismatch', { table, where, zcql: id, insert: String(roundedId) });
+    return id;
+  }
+
+  /** The Data Store answers an update with the updated row; anything else means the row was NOT changed. (Its ROWID comes back rounded, so compare numerically.) */
   _assertWritten(res, table, rowId, row) {
-    if (res && String(res.ROWID) === String(rowId)) return;
-    const e = new Error(`${table} update of ROWID ${rowId} was not applied (response: ${JSON.stringify(res).slice(0, 300)}; columns: ${Object.keys(row).join(',')})`);
+    if (res && res.ROWID !== undefined && res.ROWID !== null && Number(res.ROWID) === Number(rowId)) return;
+    const e = new Error(`${table} update of ROWID ${rowId} was not applied (response: ${String(JSON.stringify(res)).slice(0, 300)}; columns: ${Object.keys(row).join(',')})`);
     e.code = 'CATALYST_DS';
     throw e;
   }
 
-  async listRetryCandidates({ olderThan, transientOlderThan, maxAttempts, limit }) {
+  async listRetryCandidates({ olderThan, transientOlderThan, staleOlderThan, maxAttempts, limit }) {
     const cutoff = toZcqlDateTime(olderThan);
     const tCutoff = toZcqlDateTime(transientOlderThan || olderThan);
     const transient = [...TRANSIENT_REASONS].map((c) => `reason_code = '${c}'`).join(' OR ');
-    // Rows older than the normal window match the first clause; transient-reason rows also match the second (shorter) one.
-    const sql = `SELECT ${DOC_READ_COLUMNS.join(', ')} FROM document_state WHERE attempts < ${Number(maxAttempts)} AND (((status = 'EXCEPTION' OR status = 'BILLED_NO_ATTACH' OR status = 'WOULD_BILL') AND last_attempt <= '${cutoff}') OR ((${transient}) AND last_attempt <= '${tCutoff}')) ORDER BY last_attempt ASC LIMIT ${Number(limit)}`;
+    // Rows older than the normal window match the first clause; transient-reason rows also match the second (shorter) one;
+    // PROCESSING rows whose claim is older than the lock window belong to a run that died — third clause.
+    const stale = staleOlderThan ? ` OR (status = 'PROCESSING' AND last_attempt <= '${toZcqlDateTime(staleOlderThan)}')` : '';
+    const sql = `SELECT ${DOC_READ_COLUMNS.join(', ')} FROM document_state WHERE attempts < ${Number(maxAttempts)} AND (((status = 'EXCEPTION' OR status = 'BILLED_NO_ATTACH' OR status = 'WOULD_BILL') AND last_attempt <= '${cutoff}') OR ((${transient}) AND last_attempt <= '${tCutoff}')${stale}) ORDER BY last_attempt ASC LIMIT ${Number(limit)}`;
     const rows = await this._query(sql, 'document_state');
-    for (const r of rows) this.rowIds.set(r.document_id, r.ROWID);
+    for (const r of rows) this.rowIds.set(String(r.document_id), String(r.ROWID));
     return rows.map((r) => this._fromRow(r, DOC_DATETIME_FIELDS));
   }
 
@@ -232,8 +252,9 @@ class CatalystStore {
   async beginRun(run) {
     const row = this._toRow({ ...run, status: 'RUNNING' }, RUN_FIELDS, RUN_DATETIME_FIELDS);
     const inserted = await this._write('insert', () => this.ds.table('run_log').insertRow(row), { run_id: run.run_id, columns: Object.keys(row).length });
-    if (!inserted || !inserted.ROWID) throw new Error(`run_log insert returned no ROWID: ${JSON.stringify(inserted).slice(0, 300)}`);
-    return { ...run, status: 'RUNNING', ROWID: inserted.ROWID };
+    if (!inserted || !inserted.ROWID) throw new Error(`run_log insert returned no ROWID: ${String(JSON.stringify(inserted)).slice(0, 300)}`);
+    const rowId = await this._exactRowId('run_log', `run_id = '${this._esc(run.run_id)}'`, inserted.ROWID);
+    return { ...run, status: 'RUNNING', ROWID: rowId };
   }
 
   async endRun(run) {
