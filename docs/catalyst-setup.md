@@ -6,8 +6,12 @@ One-time setup to run `autoscan-run` on a schedule in the client's Catalyst proj
 
 ```bash
 npm i -g zcatalyst-cli
-catalyst login                      # browser login with the invited Zoho account
+catalyst login --force --dc eu      # browser login as the user invited to the client's project (--force replaces any other login)
+catalyst whoami
+catalyst token:generate             # → CATALYST_TOKEN=... in .env ; deploys then use this identity even if the global login changes
 ```
+
+The CLI holds one global login. With `CATALYST_TOKEN` in `.env`, `npm run deploy` passes `--token` on every command, so you can log the CLI back into another project afterwards (`catalyst login --force`) without breaking this repo.
 
 ## 2. Link this repo to the project
 
