@@ -2,7 +2,9 @@
 
 Zoho Books supplier-invoice → bill automation, running on **Zoho Catalyst** (EU DC, the client's account) with **Claude** for document reading. Replaces a previous Deluge scheduled function.
 
-> Status (Nov 2026): **Phase 1 deployed and proven** on the client's Catalyst project (Development env) against the Books sandbox — scan → read → match → bill → report, retries, de-duplication, Data Store state. Report goes to the function log until the client provides a mailbox. Production stays in **dry-run** until UAT sign-off.
+> Status (4 Nov 2026): **Phase 1 deployed and proven** on the client's Catalyst project (Development env) against the Books sandbox — scan → read → match → bill (at the invoice total) → report, automatic reconciliation, de-duplication, **credit notes → vendor credits** (applied to the bill, PDF attached), and the **once-a-day HTML digest** — all verified live. The digest goes to the function log until the client provides a mailbox. Production stays in **dry-run** until UAT sign-off.
+
+**Next:** golden set of real supplier invoices (client to send) → prompt tuning → Phase 2 (vendor carriage rules, MPN line matching, partial bills — needs the client's answers on the MPN field and carriage ownership) → UAT → production.
 
 ## What it does
 
@@ -83,8 +85,7 @@ All tunables are environment variables (`.env` locally, Catalyst env vars deploy
 
 ## Backlog (agreed with the client, not started)
 
-- **Report mailbox**: the daily email is built and tested; it goes to the log until the client provides a mailbox (`MAIL_TRANSPORT=smtp`).
-- **Credit notes — live check**: implemented and unit-tested; the vendor-credit attachment endpoint and the apply-to-bill call are verified on the sandbox with the `exact-CN` / `partial-CN` test documents.
+- **Report mailbox**: the daily email is built and verified; it goes to the log until the client provides a mailbox (`MAIL_TRANSPORT=smtp`, one deploy).
 - **Phase 2**: vendor carriage rules, line-level matching by MPN, partial bills from invoiced quantities (seed scenarios already exist, `PHASE2_ENABLED=false`).
 - **Golden set**: real supplier invoices from the client through the sandbox before UAT.
 

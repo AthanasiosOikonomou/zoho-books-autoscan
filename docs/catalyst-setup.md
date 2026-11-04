@@ -129,7 +129,7 @@ A run that is skipped with `run.skipped_active_run` means a `run_log` row is sti
 
 No extra cron is needed: the first run after `DAILY_REPORT_HOUR` (default 17, `REPORT_TIMEZONE` Europe/London) sends the end-of-day digest through `MAIL_TRANSPORT` and writes a `daily_<date>` marker row in `run_log`, so it goes out once per day. Make sure the 30-min cron still fires after that hour (e.g. business hours until 19:00).
 
-To send it on demand (or test it): **Job Scheduling → Jobs → Submit Job** → function `autoscan-run` → params `{"mode":"daily_report","force":"true"}` (`force` re-sends even if today's already went out). With `MAIL_TRANSPORT=log` the text version lands in the function log; the HTML can be previewed locally with `npm run run -- --daily-report` (writes `out/daily-<date>.html` from the local state file).
+To send it on demand: the Console's Submit Job has no params field, so the practical way is `DAILY_REPORT_HOUR=0` → deploy → submit a job → set it back to 17 → deploy (the `daily_<date>` marker stops a second send that day). Job params `{"mode":"daily_report","force":"true"}` work when a job is submitted through the Catalyst API/CLI. With `MAIL_TRANSPORT=log` the text version lands in the function log; the HTML can be previewed locally with `npm run run -- --daily-report` (writes `out/daily-<date>.html` from the local state file).
 
 ## 8. Promote to Production (go-live, later)
 
