@@ -72,6 +72,8 @@ const pos = [
 function cfg(over = {}) {
   const c = loadConfig({ BOOKS_ORG_ID: 'org', ...over });
   if (over.RETRY_AFTER_HOURS === undefined) c.run.retryAfterHours = 12;
+  if (over.REPORT_PER_RUN === undefined) c.report.perRun = true; // the pipeline tests assert on per-run emails
+  if (over.DAILY_REPORT_HOUR === undefined) c.report.dailyHour = null; // daily digest is tested on its own
   return c;
 }
 

@@ -15,6 +15,8 @@ const { createSmtpMailer, createMailer } = require('../src/report/mailers');
 const { createLogger, describeError, errorMessage } = require('../src/logger');
 const { createExtractor, renderPrompt, loadPrompt } = require('../src/claude/extractor');
 const { JsonFileStore } = require('../src/state/store');
+const { buildDailyReport, dayRange } = require('../src/report/daily');
+const { sendDailyReportIfDue } = require('../src/report/dailyTrigger');
 
 test('matchTotals: within tolerance on PO total', () => {
   const m = matchTotals({ invoiceGross: 120.01, poTotal: 120.0, tolerance: 0.02 });
@@ -229,4 +231,61 @@ test('prompt: the Books PO format is rendered from config and changes the prompt
   assert.notEqual(mk('PR-00123').promptVersion, mk('PO-00235').promptVersion);
   assert.equal(loadConfig({ PO_PREFIX: 'PR-', PO_PAD_WIDTH: '5' }).matching.poExample, 'PR-00235');
   assert.equal(loadConfig({ PO_EXAMPLE: 'PR-00123' }).matching.poExample, 'PR-00123');
+});
+
+test('dayRange: London day boundaries across BST and GMT', () => {
+  const bst = dayRange(new Date('2026-07-15T23:30:00Z'), 'Europe/London'); // 00:30 on 16 Jul in London
+  assert.equal(bst.ymd, '2026-07-16'); assert.equal(bst.since.toISOString(), '2026-07-15T23:00:00.000Z'); assert.equal(bst.until.toISOString(), '2026-07-16T23:00:00.000Z'); assert.equal(bst.hour, 0);
+  const gmt = dayRange(new Date('2026-11-04T17:05:00Z'), 'Europe/London');
+  assert.equal(gmt.ymd, '2026-11-04'); assert.equal(gmt.since.toISOString(), '2026-11-04T00:00:00.000Z'); assert.equal(gmt.hour, 17); assert.match(gmt.label, /4 Nov 2026/);
+});
+function dailyFixture() {
+  const day = dayRange(new Date('2026-11-04T17:05:00Z'));
+  const docs = [
+    { document_id: '1', file_name: 'a.pdf', status: 'BILLED', vendor_name: 'Acme', invoice_number: 'INV-1', invoice_date: '2026-11-03', po_id: 'p1', po_number: 'PR-00123', bill_id: 'b1', bill_number: 'INV-1', invoice_gross: 120.5, first_seen: '2026-11-04T09:00:00.000Z', last_attempt: '2026-11-04T09:00:00.000Z' },
+    { document_id: '2', file_name: 'cn.pdf', status: 'CREDITED', vendor_name: 'Acme', invoice_number: 'CN-9', invoice_date: '2026-11-04', po_id: 'p1', po_number: 'PR-00123', credit_id: 'vc1', credit_number: 'CN-9', invoice_gross: 36, first_seen: '2026-11-04T10:00:00.000Z', last_attempt: '2026-11-04T10:00:00.000Z' },
+    { document_id: '3', file_name: 'dup.pdf', status: 'DUPLICATE', vendor_name: 'Acme', invoice_number: 'INV-1', bill_id: 'b1', bill_number: 'INV-1', first_seen: '2026-11-04T11:00:00.000Z', last_attempt: '2026-11-04T11:00:00.000Z' },
+    { document_id: '4', file_name: 'mm.pdf', status: 'EXCEPTION', reason_code: 'TOTAL_MISMATCH', reason_text: 'invoice 259.20 vs PO 253.80, diff 5.40', vendor_name: 'Bolt', invoice_number: 'INV-4', po_id: 'p4', po_number: 'PR-00150', invoice_gross: 259.2, first_seen: '2026-11-01T09:00:00.000Z', last_attempt: '2026-11-04T12:00:00.000Z' },
+  ];
+  const open = [docs[3], { document_id: '5', file_name: 'old.pdf', status: 'EXCEPTION', reason_code: 'PO_NOT_FOUND', reason_text: 'ref "123" not found', vendor_name: 'Cog', invoice_number: 'INV-5', invoice_gross: 10, first_seen: '2026-10-30T09:00:00.000Z', last_attempt: '2026-11-03T12:00:00.000Z' }];
+  const runs = [{ run_id: 'r1', started: '2026-11-04T09:00:00.000Z', books_calls: 40, claude_calls: 3, est_cost_usd: 0.003 }, { run_id: 'r2', started: '2026-11-04T12:00:00.000Z', books_calls: 10, claude_calls: 1, est_cost_usd: 0.001 }];
+  return { day, docs, open, runs };
+}
+test('daily report: KPIs, sections, links and the unlinked-credit warning', () => {
+  const { day, docs, open, runs } = dailyFixture();
+  const config = loadConfig({ BOOKS_ORG_ID: 'org', DRY_RUN: 'false', REPORT_TO: 'fin@example.test' });
+  const r = buildDailyReport({ day, docs, open, runs, config });
+  assert.match(r.subject, /^AutoScan daily — .*4 Nov 2026: 1 bills, 1 credit, 2 need attention$/);
+  assert.deepEqual(r.counts, { billed: 1, credited: 1, attention: 2, duplicates: 1, new: 3 });
+  assert.ok(r.html.includes('#/bills/b1') && r.html.includes('#/purchaseorders/p1') && r.html.includes('#/vendorcredits/vc1'));
+  assert.ok(r.html.includes('not linked to any bill'), 'credit without a bill is flagged');
+  assert.ok(r.html.indexOf('Total mismatch') < r.html.indexOf('PO not found'), 'mismatches before missing POs');
+  assert.ok(r.html.includes('3 days') && r.html.includes('5 days'), 'waiting time per open item');
+  assert.ok(r.html.includes('50 Zoho Books API calls') && r.html.includes('4 AI reads') && r.html.includes('$0.004'));
+  assert.ok(!r.html.includes('DRY-RUN'));
+  assert.ok(r.text.includes('BILLS CREATED') && r.text.includes('NOT linked to any bill'));
+  assert.deepEqual(r.to, ['fin@example.test']);
+  const dry = buildDailyReport({ day, docs: docs.map((d) => (d.status === 'BILLED' ? { ...d, status: 'WOULD_BILL' } : d)), open, runs, config: loadConfig({ BOOKS_ORG_ID: 'org' }) });
+  assert.match(dry.subject, /DRY-RUN/); assert.ok(dry.html.includes('Would be billed today'));
+});
+test('daily trigger: not before the hour, once per day, marker in run_log, force/explicit override', async () => {
+  const store = new JsonFileStore();
+  const { docs, open } = dailyFixture();
+  for (const d of [...docs, ...open]) await store.upsert(d);
+  await store.recordRun({ run_id: 'r1', started: '2026-11-04T09:00:00.000Z', finished: '2026-11-04T09:00:10.000Z', status: 'DONE', books_calls: 40, claude_calls: 3, est_cost_usd: 0.003 });
+  const sent = []; const mailer = { async send(r) { sent.push(r); } };
+  const logger = { info() {}, warn() {}, error() {} };
+  const config = loadConfig({ BOOKS_ORG_ID: 'org', DRY_RUN: 'false', DAILY_REPORT_HOUR: '17' });
+  assert.equal((await sendDailyReportIfDue({ config, store, mailer, logger, now: new Date('2026-11-04T16:59:00Z') })).reason, 'too_early');
+  const first = await sendDailyReportIfDue({ config, store, mailer, logger, now: new Date('2026-11-04T17:05:00Z') });
+  assert.equal(first.sent, true); assert.equal(sent.length, 1); assert.equal(first.counts.billed, 1);
+  assert.ok(await store.getRunById('daily_2026-11-04'), 'marker written');
+  assert.equal((await sendDailyReportIfDue({ config, store, mailer, logger, now: new Date('2026-11-04T18:05:00Z') })).reason, 'already_sent');
+  assert.equal((await sendDailyReportIfDue({ config, store, mailer, logger, now: new Date('2026-11-04T18:05:00Z'), explicit: true, force: true })).sent, true);
+  assert.equal(sent.length, 2);
+  // explicit ignores the hour; disabled config never sends implicitly
+  assert.equal((await sendDailyReportIfDue({ config, store, mailer, logger, now: new Date('2026-11-05T08:00:00Z'), explicit: true })).sent, true);
+  assert.equal((await sendDailyReportIfDue({ config: loadConfig({ BOOKS_ORG_ID: 'org', DAILY_REPORT_HOUR: 'off' }), store, mailer, logger, now: new Date('2026-11-06T20:00:00Z') })).reason, 'disabled');
+  // the marker row is never RUNNING, so it cannot block the run lock
+  assert.equal((await store.getActiveRun({ staleMinutes: 15, now: new Date('2026-11-04T17:06:00Z').getTime() })), null);
 });

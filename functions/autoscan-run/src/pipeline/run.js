@@ -1,6 +1,8 @@
 'use strict';
 
 const { errorMessage } = require('../logger');
+const { createLogMailer } = require('../report/mailers');
+const { sendDailyReportIfDue } = require('../report/dailyTrigger');
 
 const { STATUS } = require('../state/store');
 const { processDocument } = require('./processDocument');
@@ -111,9 +113,11 @@ async function runAutoscan(deps) {
 
   if (results.length > 0 || run.status === 'FAILED') {
     const report = buildReport({ run, results, config, stoppedEarly });
+    // The per-run report is emailed only when REPORT_PER_RUN=true; otherwise it goes to the log and the daily digest is the email.
+    const perRunMailer = config.report.perRun ? mailer : createLogMailer({ logger });
     try {
-      await mailer.send(report);
-      run.report_sent = true;
+      await perRunMailer.send(report);
+      run.report_sent = !!config.report.perRun;
     } catch (err) {
       logger.error('report.send_failed', { error: err });
     }
@@ -121,6 +125,14 @@ async function runAutoscan(deps) {
 
   await store.endRun(run);
   logger.info('run.done', { ...summary, status: run.status, stopped: stoppedEarly, ms: finishedAt - startedAt });
+
+  // 6. end-of-day digest — once per local day, after DAILY_REPORT_HOUR; failures never fail the run
+  try {
+    const daily = await sendDailyReportIfDue({ config, store, mailer, logger, now: now() });
+    if (daily.sent) run.daily_report = daily.counts;
+  } catch (err) {
+    logger.error('daily.failed', { error: err });
+  }
   return { ...run, results };
 }
 

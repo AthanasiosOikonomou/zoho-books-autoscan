@@ -82,6 +82,9 @@ function loadConfig(env = process.env) {
       devCopy: list(env.REPORT_DEV_COPY, []),
       from: env.REPORT_FROM || env.SMTP_USER || '',
       subjectPrefix: env.REPORT_SUBJECT_PREFIX || 'AutoScan',
+      perRun: bool(env.REPORT_PER_RUN, false), // per-run report by email too (default: log only; the daily digest is the email)
+      dailyHour: env.DAILY_REPORT_HOUR === '' || String(env.DAILY_REPORT_HOUR).toLowerCase() === 'off' ? null : num(env.DAILY_REPORT_HOUR, 17), // local hour after which the daily digest goes out; off = never
+      timeZone: env.REPORT_TIMEZONE || 'Europe/London',
       // log = no email, the report text goes to the function log | smtp = any SMTP mailbox | catalyst = Catalyst Mail (domain verified)
       transport: String(env.MAIL_TRANSPORT || 'log').toLowerCase(),
       smtp: {

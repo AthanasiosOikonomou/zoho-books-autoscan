@@ -32,6 +32,8 @@ const STATUS = Object.freeze({
 const TERMINAL = new Set([STATUS.BILLED, STATUS.DUPLICATE, STATUS.CREDITED]);
 // WOULD_BILL / WOULD_CREDIT are retry-eligible so the first LIVE run after a dry-run period posts them.
 const RETRYABLE = new Set([STATUS.EXCEPTION, STATUS.BILLED_NO_ATTACH, STATUS.WOULD_BILL, STATUS.WOULD_CREDIT]);
+/** Still waiting for a human or a retry — what the daily report calls "needs attention". */
+const OPEN_STATUSES = new Set([STATUS.EXCEPTION, STATUS.BILLED_NO_ATTACH, STATUS.WOULD_BILL, STATUS.WOULD_CREDIT]);
 /** Reasons caused by us/the services, not by the document: retried on the next run instead of after RETRY_AFTER_HOURS. */
 const TRANSIENT_REASONS = new Set(['AI_ERROR', 'BOOKS_ERROR', 'ATTACH_FAILED']);
 
@@ -101,6 +103,20 @@ class JsonFileStore {
     this._save();
     return this.data.runs[run.run_id];
   }
+  async recordRun(run) { this.data.runs[run.run_id] = { ...run }; this._save(); return this.data.runs[run.run_id]; }
+  async getRunById(runId) { return this.data.runs[runId] || null; }
+  // --- daily report
+  async listDocumentsTouchedBetween({ since, until, limit = 300 }) {
+    const a = new Date(since).toISOString(); const b = new Date(until).toISOString();
+    return Object.values(this.data.documents).filter((d) => d.last_attempt && d.last_attempt >= a && d.last_attempt < b).sort((x, y) => String(x.last_attempt).localeCompare(String(y.last_attempt))).slice(0, limit);
+  }
+  async listOpenExceptions({ limit = 300 } = {}) {
+    return Object.values(this.data.documents).filter((d) => OPEN_STATUSES.has(d.status)).sort((x, y) => String(x.first_seen).localeCompare(String(y.first_seen))).slice(0, limit);
+  }
+  async listRunsBetween({ since, until, limit = 300 }) {
+    const a = new Date(since).toISOString(); const b = new Date(until).toISOString();
+    return Object.values(this.data.runs).filter((r) => r.started && r.started >= a && r.started < b).slice(0, limit);
+  }
 }
 
 // ------------------------------------------------------------------ Catalyst Data Store
@@ -130,6 +146,7 @@ const DOC_REPORT_COLUMNS = [
 const DOC_DATETIME_FIELDS = ['first_seen', 'last_attempt'];
 const RUN_DATETIME_FIELDS = ['started', 'finished'];
 const RUN_READ_COLUMNS = ['ROWID', 'run_id', 'started', 'finished', 'status', 'notes'];
+const RUN_REPORT_COLUMNS = ['ROWID', 'run_id', 'started', 'finished', 'status', 'docs_seen', 'new_count', 'billed', 'exceptions', 'retried', 'errors', 'books_calls', 'claude_calls', 'tokens_in', 'tokens_out', 'est_cost_usd', 'report_sent', 'notes'];
 const TEXT_MAX = 9900;
 
 class CatalystStore {
@@ -271,6 +288,33 @@ class CatalystStore {
     this._assertWritten(updated, 'run_log', run.ROWID, row);
     return run;
   }
+
+  /** One-shot row (e.g. the daily-report marker): inserted with its final status, never RUNNING. */
+  async recordRun(run) {
+    const row = this._toRow(run, RUN_FIELDS, RUN_DATETIME_FIELDS);
+    const inserted = await this._write('insert', () => this.ds.table('run_log').insertRow(row), { run_id: run.run_id, status: row.status, columns: Object.keys(row).length });
+    if (!inserted || !inserted.ROWID) throw new Error(`run_log insert returned no ROWID: ${String(JSON.stringify(inserted)).slice(0, 300)}`);
+    return run;
+  }
+  async getRunById(runId) {
+    const rows = await this._query(`SELECT ${RUN_READ_COLUMNS.join(', ')} FROM run_log WHERE run_id = '${this._esc(runId)}' LIMIT 1`, 'run_log');
+    return rows[0] ? this._fromRow(rows[0], RUN_DATETIME_FIELDS) : null;
+  }
+
+  // --- daily report (ZCQL: ≤ 20 columns, ≤ 300 rows per query)
+  async listDocumentsTouchedBetween({ since, until, limit = 300 }) {
+    const rows = await this._query(`SELECT ${DOC_REPORT_COLUMNS.join(', ')} FROM document_state WHERE last_attempt >= '${toZcqlDateTime(since)}' AND last_attempt < '${toZcqlDateTime(until)}' ORDER BY last_attempt ASC LIMIT ${Number(limit)}`, 'document_state');
+    return rows.map((r) => this._fromRow(r, DOC_DATETIME_FIELDS));
+  }
+  async listOpenExceptions({ limit = 300 } = {}) {
+    const where = [...OPEN_STATUSES].map((s) => `status = '${s}'`).join(' OR ');
+    const rows = await this._query(`SELECT ${DOC_REPORT_COLUMNS.join(', ')} FROM document_state WHERE ${where} ORDER BY first_seen ASC LIMIT ${Number(limit)}`, 'document_state');
+    return rows.map((r) => this._fromRow(r, DOC_DATETIME_FIELDS));
+  }
+  async listRunsBetween({ since, until, limit = 300 }) {
+    const rows = await this._query(`SELECT ${RUN_REPORT_COLUMNS.join(', ')} FROM run_log WHERE started >= '${toZcqlDateTime(since)}' AND started < '${toZcqlDateTime(until)}' ORDER BY started ASC LIMIT ${Number(limit)}`, 'run_log');
+    return rows.map((r) => this._fromRow(r, RUN_DATETIME_FIELDS));
+  }
 }
 
 const RUN_FIELDS = ['run_id', 'started', 'finished', 'status', 'docs_seen', 'new_count', 'billed', 'exceptions', 'retried', 'errors', 'books_calls', 'claude_calls', 'tokens_in', 'tokens_out', 'est_cost_usd', 'report_sent', 'notes'];
@@ -286,4 +330,4 @@ function fromZcqlDateTime(s) {
   return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])).toISOString();
 }
 
-module.exports = { STATUS, TERMINAL, RETRYABLE, TRANSIENT_REASONS, DOCUMENT_FIELDS, RUN_FIELDS, DOC_READ_COLUMNS, DOC_REPORT_COLUMNS, JsonFileStore, CatalystStore, toZcqlDateTime, fromZcqlDateTime };
+module.exports = { STATUS, TERMINAL, RETRYABLE, OPEN_STATUSES, TRANSIENT_REASONS, DOCUMENT_FIELDS, RUN_FIELDS, DOC_READ_COLUMNS, DOC_REPORT_COLUMNS, JsonFileStore, CatalystStore, toZcqlDateTime, fromZcqlDateTime };

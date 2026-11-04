@@ -9,6 +9,7 @@
  *   node scripts/local-run.js --limit 5  → cap new documents this run
  *   node scripts/local-run.js --retry-now → re-check EXCEPTION docs now instead of after RETRY_AFTER_HOURS (no AI cost)
  *   node scripts/local-run.js --reset-state → forget everything seen (next run re-extracts: costs AI calls)
+ *   node scripts/local-run.js --daily-report [--date YYYY-MM-DD] → build the end-of-day digest from the local state into out/ (no Books/AI calls)
  *
  * State is kept in STATE_FILE (default ./.autoscan-state.json) so repeated
  * local runs behave exactly like production (no re-reading of files).
@@ -26,6 +27,7 @@ const { createExtractor } = fn('claude/extractor');
 const { JsonFileStore } = fn('state/store');
 const { createFileMailer } = fn('report/mailers');
 const { runAutoscan } = fn('pipeline/run');
+const { buildDailyReport, dayRange } = fn('report/daily');
 
 (async () => {
   const args = process.argv.slice(2);
@@ -34,6 +36,21 @@ const { runAutoscan } = fn('pipeline/run');
   const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) : null;
   const retryNow = args.includes('--retry-now');
   const resetState = args.includes('--reset-state');
+
+  if (args.includes('--daily-report')) {
+    const config = loadConfig(process.env);
+    const dateIdx = args.indexOf('--date');
+    const now = dateIdx >= 0 ? new Date(`${args[dateIdx + 1]}T23:59:00Z`) : new Date();
+    const store = new JsonFileStore({ filePath: path.resolve(config.local.stateFile) });
+    const day = dayRange(now, config.report.timeZone);
+    const [docs, open, runs] = await Promise.all([store.listDocumentsTouchedBetween({ since: day.since, until: day.until }), store.listOpenExceptions(), store.listRunsBetween({ since: day.since, until: day.until })]);
+    const report = buildDailyReport({ day, docs, open, runs: runs.filter((r) => !String(r.run_id).startsWith('daily_')), config });
+    const fs = require('fs'); fs.mkdirSync(path.resolve(config.local.outDir), { recursive: true });
+    const file = path.join(path.resolve(config.local.outDir), `daily-${day.ymd}.html`);
+    fs.writeFileSync(file, `<!doctype html><meta charset="utf-8"><title>${report.subject}</title>${report.html}`);
+    console.log(report.text); console.log(`\nHTML written to ${file}`);
+    return;
+  }
 
   const config = assertRuntimeConfig(loadConfig(process.env));
   if (live && config.run.dryRun) {
