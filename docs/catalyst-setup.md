@@ -108,18 +108,20 @@ npm run deploy                   # = catalyst-config + catalyst deploy --only fu
 
 Keep `DRY_RUN=true` in `.env` until UAT sign-off; the deployed job then reports but never writes to Books.
 
-## 6. Cron
+## 6. Job pool + first run
 
-Console → **Cron → New Cron** → name `autoscan-every-30m` → type *Function* → function `autoscan-run` → *Periodic*, every 30 minutes → restrict to business hours if the UI allows (Mon–Fri 07:00–19:00 Europe/London), otherwise leave 24/7 (empty runs cost nothing measurable).
+Job functions run through **Job Scheduling** (there is no Execute button on the function):
 
-## 7. First run
+1. Console → **Job Scheduling → Job Pools → Create**: name `autoscan-pool`, type *Function*, memory 512 MB, capacity 1.
+2. **Job Scheduling → Jobs → Submit Job**: pool `autoscan-pool`, function `autoscan-run`, params `{}`.
+3. **Logs** (DevOps → Logs, component Functions → `autoscan-run`, last hour) — Job logs arrive with a 1–3 min delay. Expect `run.scan` … `run.done`, then the text report (`MAIL_TRANSPORT=log`).
+4. `run_log` has a row with status DONE; `document_state` has one row per inbox document, none left in `PROCESSING`.
 
-Trigger the job once from the Console (Functions → autoscan-run → Execute / Logs) and check:
+A run that is skipped with `run.skipped_active_run` means a `run_log` row is still `RUNNING` from a run younger than `LOCK_STALE_MINUTES` (15) — wait, or set that row's status to FAILED.
 
-- Logs show `run.scan`, `run.done`
-- `run_log` has a row with status DONE
-- `document_state` has one row per inbox document
-- the report email arrived at `REPORT_TO`
+## 7. Cron
+
+**Job Scheduling → Crons → Create**: name `autoscan-every-30m`, *Periodic*, every 30 minutes, target pool `autoscan-pool` → function `autoscan-run`, enable. Restrict to business hours if the UI allows (Mon–Fri 07:00–19:00 Europe/London); otherwise leave 24/7 — an empty run costs nothing measurable (a few ZCQL calls, no Claude call).
 
 ## 8. Promote to Production (go-live, later)
 
