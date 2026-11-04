@@ -142,11 +142,22 @@ test('config: MAIL_TRANSPORT=smtp requires SMTP_USER/SMTP_PASS and defaults REPO
   assert.equal(cfg.report.from, 'bot@example.test');
   assert.equal(cfg.report.smtp.host, 'smtp.zoho.eu'); assert.equal(cfg.report.smtp.port, 465); assert.equal(cfg.report.smtp.secure, true);
   assert.throws(() => assertRuntimeConfig(loadConfig({ ...base, MAIL_TRANSPORT: 'pigeon' })), /MAIL_TRANSPORT/);
-  assert.equal(loadConfig(base).report.transport, 'catalyst');
+  assert.equal(loadConfig(base).report.transport, 'log');
+  assert.doesNotThrow(() => assertRuntimeConfig(loadConfig(base)));
 });
 test('createMailer: picks smtp vs catalyst by config', () => {
   const logger = { info() {}, warn() {} };
   const smtpCfg = loadConfig({ MAIL_TRANSPORT: 'smtp', SMTP_USER: 'u', SMTP_PASS: 'p' });
   assert.equal(typeof createMailer({ config: smtpCfg, app: null, logger }).send, 'function');
-  assert.equal(typeof createMailer({ config: loadConfig({}), app: { email() { return {}; } }, logger }).send, 'function');
+  assert.equal(typeof createMailer({ config: loadConfig({ MAIL_TRANSPORT: 'catalyst' }), app: { email() { return {}; } }, logger }).send, 'function');
+});
+test('log mailer: sends nothing, writes the text report to stdout', async () => {
+  const logs = []; const out = [];
+  const orig = console.log; console.log = (s) => out.push(String(s));
+  try {
+    await createMailer({ config: loadConfig({}), app: null, logger: { info: (e, d) => logs.push([e, d]), warn() {} } })
+      .send({ subject: 'AutoScan run', to: ['a@b.c'], html: '<b>x</b>', text: 'TEXT REPORT' });
+  } finally { console.log = orig; }
+  assert.equal(logs[0][0], 'mail.skipped');
+  assert.ok(out.join('\n').includes('TEXT REPORT'));
 });

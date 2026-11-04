@@ -79,8 +79,8 @@ function loadConfig(env = process.env) {
       devCopy: list(env.REPORT_DEV_COPY, []),
       from: env.REPORT_FROM || env.SMTP_USER || '',
       subjectPrefix: env.REPORT_SUBJECT_PREFIX || 'AutoScan',
-      // catalyst = Catalyst Mail (sender/domain verified in the Console) | smtp = any SMTP account (e.g. Zoho Mail + app password)
-      transport: String(env.MAIL_TRANSPORT || 'catalyst').toLowerCase(),
+      // log = no email, the report text goes to the function log | smtp = any SMTP mailbox | catalyst = Catalyst Mail (domain verified)
+      transport: String(env.MAIL_TRANSPORT || 'log').toLowerCase(),
       smtp: {
         host: env.SMTP_HOST || 'smtp.zoho.eu',
         port: num(env.SMTP_PORT, 465),
@@ -108,8 +108,8 @@ function assertRuntimeConfig(cfg) {
   if (!cfg.books.clientSecret) missing.push('BOOKS_CLIENT_SECRET');
   if (!cfg.books.refreshToken) missing.push('BOOKS_REFRESH_TOKEN');
   if (!cfg.claude.apiKey) missing.push('ANTHROPIC_API_KEY');
-  if (!['catalyst', 'smtp'].includes(cfg.report.transport)) {
-    throw new Error(`MAIL_TRANSPORT must be "catalyst" or "smtp" (got "${cfg.report.transport}")`);
+  if (!['log', 'smtp', 'catalyst'].includes(cfg.report.transport)) {
+    throw new Error(`MAIL_TRANSPORT must be "log", "smtp" or "catalyst" (got "${cfg.report.transport}")`);
   }
   if (cfg.report.transport === 'smtp') {
     if (!cfg.report.smtp.user) missing.push('SMTP_USER');

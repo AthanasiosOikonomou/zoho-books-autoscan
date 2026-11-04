@@ -67,10 +67,22 @@ function createSmtpMailer({ smtp, logger, transport }) {
   };
 }
 
+/** Log only — no email is sent; the text report is written to the function log (Console → Logs). */
+function createLogMailer({ logger }) {
+  return {
+    async send(report) {
+      logger.info('mail.skipped', { transport: 'log', subject: report.subject, to: (report.to || []).length });
+      // eslint-disable-next-line no-console
+      console.log(`\n===== ${report.subject} =====\n${report.text}\n===== end of report =====`);
+    },
+  };
+}
+
 /** Picks the mailer from config.report.transport. */
 function createMailer({ config, app, logger }) {
   if (config.report.transport === 'smtp') return createSmtpMailer({ smtp: config.report.smtp, logger });
-  return createCatalystMailer({ app, logger });
+  if (config.report.transport === 'catalyst') return createCatalystMailer({ app, logger });
+  return createLogMailer({ logger });
 }
 
-module.exports = { createCatalystMailer, createSmtpMailer, createFileMailer, createMailer };
+module.exports = { createCatalystMailer, createSmtpMailer, createLogMailer, createFileMailer, createMailer };

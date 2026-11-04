@@ -78,9 +78,24 @@ Console → the project → Development → **Data Store → New Table**. Column
 
 The function initialises the SDK with `scope: 'admin'`, so no table permission changes are needed.
 
-## 4. Mail sender
+## 4. Report email
 
-Console → **Mail → Senders** → add the address the report is sent from (`REPORT_FROM` in `.env`) and complete the verification email. During testing use a mailbox you control; production uses an address the client owns.
+Two transports, chosen by `MAIL_TRANSPORT` in `.env`:
+
+**`smtp` (default, no Catalyst verification)** — the function sends through any SMTP mailbox with nodemailer. For Zoho Mail: accounts.zoho.eu → Security → **App Passwords** → generate one for "AutoScan" → `.env`:
+
+```
+MAIL_TRANSPORT=smtp
+SMTP_HOST=smtp.zoho.eu     # 465 + SMTP_SECURE=true (implicit TLS); or 587 + SMTP_SECURE=false (STARTTLS)
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=<the mailbox>
+SMTP_PASS=<app password>
+```
+
+The From address is `SMTP_USER` (Zoho Mail rejects any other From unless it is an alias of that mailbox). Development: a mailbox you control. Production: a mailbox the client owns (e.g. a no-reply/finance address) with its own app password — the client generates it, you paste it into `.env`.
+
+**`catalyst`** — Catalyst Mail (`app.email().sendMail`). Needs Console → **Mail → Senders**: either a verified individual sender or a verified domain (DNS TXT). Set `MAIL_TRANSPORT=catalyst` and `REPORT_FROM=<verified sender>`. Use this if the client prefers to verify their domain at go-live.
 
 ## 5. Environment variables + deploy
 
@@ -108,4 +123,4 @@ Trigger the job once from the Console (Functions → autoscan-run → Execute / 
 
 ## 8. Promote to Production (go-live, later)
 
-Create the same two tables and the Mail sender in Production, switch `.env` to production values (Books org, production API key named `autoscan-production` from a **service account**, `REPORT_TO` = the finance inbox, `DRY_RUN=false`), `npm run deploy` against Production, enable the cron, and switch off the old Deluge schedule.
+Create the same two tables in Production, switch `.env` to production values (Books org, production API key named `autoscan-production` from a **service account**, `REPORT_TO` = the finance inbox, the client's own SMTP mailbox + app password (or `MAIL_TRANSPORT=catalyst` with their verified domain), `DRY_RUN=false`), `npm run deploy` against Production, enable the cron, and switch off the old Deluge schedule.
