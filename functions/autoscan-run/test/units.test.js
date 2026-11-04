@@ -14,7 +14,7 @@ const { loadConfig, assertRuntimeConfig } = require('../src/config');
 const { createSmtpMailer, createMailer } = require('../src/report/mailers');
 const { createLogger, describeError, errorMessage } = require('../src/logger');
 const { createExtractor, renderPrompt, loadPrompt } = require('../src/claude/extractor');
-const { JsonFileStore } = require('../src/state/store');
+const { JsonFileStore, CatalystStore, wrapStoreError, isTransientStoreError } = require('../src/state/store');
 const { buildDailyReport, dayRange } = require('../src/report/daily');
 const { sendDailyReportIfDue } = require('../src/report/dailyTrigger');
 
@@ -288,4 +288,31 @@ test('daily trigger: not before the hour, once per day, marker in run_log, force
   assert.equal((await sendDailyReportIfDue({ config: loadConfig({ BOOKS_ORG_ID: 'org', DAILY_REPORT_HOUR: 'off' }), store, mailer, logger, now: new Date('2026-11-06T20:00:00Z') })).reason, 'disabled');
   // the marker row is never RUNNING, so it cannot block the run lock
   assert.equal((await store.getActiveRun({ staleMinutes: 15, now: new Date('2026-11-04T17:06:00Z').getTime() })), null);
+});
+
+test('store errors: SDK objects with getter-only code/message and plain-string rejections are wrapped, never mutated', () => {
+  class SdkErr extends Error { constructor(info) { super(info.message); this.errorInfo = info; } get code() { return this.errorInfo.code; } get message() { return this.errorInfo.message; } }
+  const sdk = new SdkErr({ code: 'request_failure', message: 'socket hang up' });
+  const w = wrapStoreError(sdk);
+  assert.equal(w.code, 'request_failure'); assert.equal(w.message, 'socket hang up'); assert.equal(w.cause, sdk); assert.equal(isTransientStoreError(w), true);
+  const s = wrapStoreError('Request failed with status 500 and code : INTERNAL , message : boom');
+  assert.equal(s.code, 'HTTP_500'); assert.equal(s.status, 500); assert.equal(isTransientStoreError(s), true);
+  const v = wrapStoreError('Request failed with status 400 and code : INVALID_VALUE , message : bad column');
+  assert.equal(isTransientStoreError(v), false); assert.match(v.message, /bad column/);
+  const plain = wrapStoreError({ status: 'failure', data: { message: 'x' } });
+  assert.match(plain.message, /"message":"x"/); assert.equal(plain.code, 'CATALYST_DS');
+});
+test('store writes: a transient failure is retried, a permanent one is not', async () => {
+  const logs = [];
+  const logger = { debug() {}, info() {}, warn: (m, d) => logs.push(['warn', m, d]), error: (m, d) => logs.push(['error', m, d]) };
+  const store = new CatalystStore({ app: { datastore: () => ({}), zcql: () => ({}) }, logger });
+  let n = 0;
+  const res = await store._write('update', async () => { n++; if (n < 3) throw 'Request failed with status 503 and code : UNAVAILABLE , message : later'; return { ROWID: '1' }; }, { x: 1 }, { backoffMs: 1 });
+  assert.equal(res.ROWID, '1'); assert.equal(n, 3); assert.equal(logs.filter((l) => l[1] === 'store.write_retry').length, 2);
+  let m = 0;
+  await assert.rejects(() => store._write('update', async () => { m++; throw 'Request failed with status 400 and code : INVALID , message : nope'; }, {}, { backoffMs: 1 }), /nope/);
+  assert.equal(m, 1, 'no retry on a 400');
+  let k = 0;
+  await assert.rejects(() => store._write('update', async () => { k++; throw 'Request failed with status 500 and code : X , message : down'; }, {}, { attempts: 2, backoffMs: 1 }), /down/);
+  assert.equal(k, 2, 'gives up after the configured attempts');
 });

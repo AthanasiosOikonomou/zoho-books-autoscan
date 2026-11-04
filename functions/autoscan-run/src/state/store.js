@@ -224,17 +224,24 @@ class CatalystStore {
     return { ...record, ROWID: rowId };
   }
 
-  /** Runs a Data Store write, logging the outcome; SDK rejections are plain strings, so they are wrapped into Errors here. */
-  async _write(op, fn, meta) {
-    try {
-      const res = await fn();
-      this.logger.debug('store.write', { op, ...meta, resp_rowid: res && res.ROWID, resp_modified: res && res.MODIFIEDTIME });
-      return res;
-    } catch (err) {
-      const e = err instanceof Error ? err : new Error(typeof err === 'string' ? err : JSON.stringify(err).slice(0, 500));
-      e.code = e.code || 'CATALYST_DS';
-      this.logger.error('store.write_failed', { op, ...meta, error: e });
-      throw e;
+  /**
+   * Runs a Data Store write, logging the outcome. The SDK rejects with plain strings (HTTP errors) or with
+   * CatalystError objects whose `code`/`message` are getters, so every failure is re-wrapped into a fresh Error.
+   * Transient failures (network / 5xx / unparsable response) are retried a couple of times before giving up.
+   */
+  async _write(op, fn, meta, { attempts = 3, backoffMs = 400 } = {}) {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const res = await fn();
+        this.logger.debug('store.write', { op, ...meta, attempt, resp_rowid: res && res.ROWID, resp_modified: res && res.MODIFIEDTIME });
+        return res;
+      } catch (err) {
+        const e = wrapStoreError(err);
+        const transient = isTransientStoreError(e) && attempt < attempts;
+        this.logger[transient ? 'warn' : 'error'](transient ? 'store.write_retry' : 'store.write_failed', { op, ...meta, attempt, error: e });
+        if (!transient) throw e;
+        await new Promise((r) => setTimeout(r, backoffMs * attempt));
+      }
     }
   }
 
@@ -319,6 +326,27 @@ class CatalystStore {
 
 const RUN_FIELDS = ['run_id', 'started', 'finished', 'status', 'docs_seen', 'new_count', 'billed', 'exceptions', 'retried', 'errors', 'books_calls', 'claude_calls', 'tokens_in', 'tokens_out', 'est_cost_usd', 'report_sent', 'notes'];
 
+/** A fresh Error carrying the SDK error's code/message (never mutates the SDK object: its `code` is a getter-only property). */
+function wrapStoreError(err) {
+  if (typeof err === 'string') { const e = new Error(err); e.code = /status (\d{3})/.test(err) ? `HTTP_${RegExp.$1}` : 'CATALYST_DS'; e.status = Number((err.match(/status (\d{3})/) || [])[1]) || undefined; return e; }
+  let code; let message; let status;
+  try { code = err && err.code; } catch (_) { /* getter may throw */ }
+  try { message = err && err.message; } catch (_) { /* ignore */ }
+  try { status = err && (err.status || err.statusCode || (err.errorInfo && err.errorInfo.status)); } catch (_) { /* ignore */ }
+  if (!message) { try { message = JSON.stringify(err && typeof err.toJSON === 'function' ? err.toJSON() : err).slice(0, 500); } catch (_) { message = String(err); } }
+  const e = new Error(message || 'Data Store error');
+  e.code = code ? String(code) : 'CATALYST_DS';
+  if (status) e.status = status;
+  e.cause = err;
+  return e;
+}
+function isTransientStoreError(e) {
+  const c = String(e.code || ''); const s = Number(e.status || 0); const m = String(e.message || '').toLowerCase();
+  if (s >= 500 || s === 429) return true;
+  if (/^(request_failure|empty_response|unparsable_response|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|HTTP_5\d\d|HTTP_429)$/i.test(c)) return true;
+  return /socket hang up|timeout|temporarily|try again|internal server error|service unavailable|bad gateway/.test(m);
+}
+
 function toZcqlDateTime(d) {
   const x = new Date(d);
   const p = (n) => String(n).padStart(2, '0');
@@ -330,4 +358,4 @@ function fromZcqlDateTime(s) {
   return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])).toISOString();
 }
 
-module.exports = { STATUS, TERMINAL, RETRYABLE, OPEN_STATUSES, TRANSIENT_REASONS, DOCUMENT_FIELDS, RUN_FIELDS, DOC_READ_COLUMNS, DOC_REPORT_COLUMNS, JsonFileStore, CatalystStore, toZcqlDateTime, fromZcqlDateTime };
+module.exports = { STATUS, TERMINAL, RETRYABLE, OPEN_STATUSES, TRANSIENT_REASONS, wrapStoreError, isTransientStoreError, DOCUMENT_FIELDS, RUN_FIELDS, DOC_READ_COLUMNS, DOC_REPORT_COLUMNS, JsonFileStore, CatalystStore, toZcqlDateTime, fromZcqlDateTime };

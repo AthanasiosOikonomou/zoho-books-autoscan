@@ -86,6 +86,7 @@ function buildReport({ run, results, config, stoppedEarly }) {
     subject, '',
     `New: ${run.new_count}  Retried: ${run.retried}  Billed: ${billed.length + wouldBill.length}  Credited: ${credits.length}  Review: ${exceptions.length}  Duplicates: ${dupes.length}`,
     ...credits.map((r) => `  + credit ${r.credit ? r.credit.number : ''} | ${r.file_name} | ${r.credit && r.credit.bill ? `bill ${r.credit.bill}` : 'NOT linked to any bill'}${r.note ? ` | ${r.note}` : ''}`),
+    ...dupes.map((r) => `  = duplicate | ${r.file_name} | ${r.extracted ? r.extracted.invoice_number : ''} | ${r.reason_text || ''}`),
     ...[...groups].flatMap(([code, rows]) => [``, `${code} (${rows.length}): ${(REASONS[code] || {}).action || ''}`, ...rows.map((r) => `  - ${r.file_name} | ${r.extracted ? r.extracted.invoice_number : ''} | ${r.reason_text || ''}`)]),
   ].join('\n');
 
