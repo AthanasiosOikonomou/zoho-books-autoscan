@@ -15,3 +15,5 @@
 | 2026-11-04 | The bill carries the supplier invoice total, not the PO's: the difference inside the tolerance is posted as the bill's `adjustment`; a bill whose total still differs is reported with a note | Client rule — the previous implementation billed the PO value |
 | 2026-11-04 | Credit notes get their own reason `CREDIT_NOTE` (manual for now) | Suppliers send credit notes, sometimes tied to a bill, always with the PO number; automation is a later phase |
 | 2026-11-04 | Reconciliation window: exceptions re-checked every 6 h for up to 28 attempts (a week), reusing the stored extraction | A PO fixed hours or days later must bill itself without raising the AI cost |
+| 2026-11-04 | Credit notes → Books vendor credits: lines by MPN against the PO, total verified (draft deleted on mismatch), applied to the bill named on the note or the PO's single bill, else PO only + report line | Client rule; a credit must never sit outside Books |
+| 2026-11-04 | One digest email per local day, sent by the first run after `DAILY_REPORT_HOUR`; per-run reports stay in the log | Finance asked for one readable end-of-day email, not one per run |

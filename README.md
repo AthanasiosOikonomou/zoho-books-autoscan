@@ -10,6 +10,10 @@ Every 30 minutes a Catalyst Job function reads the Zoho Books **Documents inbox*
 
 Exceptions are **reconciled automatically**: a document whose PO was missing or wrong is re-checked every 6 h for a week (28 attempts) using the stored extraction — no second AI call — so fixing the PO hours or days later bills it without anyone touching the inbox. Service errors (AI, Books, attachment) retry on the next run. Duplicate supplier invoice numbers are never billed twice; a PO can receive several bills (partial deliveries).
 
+**Credit notes** become Books **vendor credits**: lines mapped to the PO's lines by MPN, the credit applied to the bill it refers to (by the invoice number printed on it, or the PO's only bill), otherwise left against the PO and reported as *not linked to any bill*. Same credit-note number twice → duplicate.
+
+**Reporting**: every run writes its report to the function log; finance gets **one email per day** — an HTML dashboard with bills created (links into Books), vendor credits, everything still waiting for a human grouped by reason with the action to take and how long it has been waiting, duplicates, and the day's API/AI cost. Sent by the first run after `DAILY_REPORT_HOUR`, or on demand (`docs/catalyst-setup.md` §7b).
+
 ## Layout
 
 | Path | What |
@@ -45,7 +49,7 @@ cp .env.example .env
 npm test
 ```
 
-The pipeline tests prove with fakes: new documents processed first; exceptions never re-extracted and only retried after `RETRY_AFTER_HOURS`; dry-run writes nothing; duplicate supplier invoice numbers are never billed twice; a PO with an existing bill still gets a new bill for a different invoice; same file re-uploaded reuses the extraction; the bill is posted with the invoice total (adjustment) and a differing bill total is flagged; credit notes are their own exception; stale claims from a dead run and transient errors are retried.
+The pipeline tests prove with fakes: new documents processed first; exceptions never re-extracted and only retried after `RETRY_AFTER_HOURS`; dry-run writes nothing; duplicate supplier invoice numbers are never billed twice; a PO with an existing bill still gets a new bill for a different invoice; same file re-uploaded reuses the extraction; the bill is posted with the invoice total (adjustment) and a differing bill total is flagged; credit notes become vendor credits applied to the right bill (or the PO only, reported), de-duplicated, removed again when Books prices them differently; the daily digest goes out once per local day; stale claims from a dead run and transient errors are retried.
 
 ## Deploy (Catalyst, Development env)
 
@@ -63,23 +67,24 @@ npm run deploy        # generates functions/autoscan-run/catalyst-config.json fr
 |---|---|---|
 | `BILLED` | Bill created from the PO, PDF attached, inbox file deleted | — |
 | `WOULD_BILL` | Same, but `DRY_RUN=true` — nothing written | yes |
+| `CREDITED` / `WOULD_CREDIT` | Vendor credit created from a credit note (applied to the bill when identifiable) | — / yes |
 | `DUPLICATE` | A bill with this supplier invoice number already exists for the vendor | no |
 | `TOTAL_MISMATCH` | Invoice total differs from the PO (or its remaining value) by more than the tolerance | every 6 h |
 | `PO_NOT_FOUND` / `NO_PO_REF` | PO reference not in Books / not readable on the document | every 6 h |
 | `BILL_TEMPLATE_MISMATCH` | Books would bill a different figure from the PO's remaining quantities | every 6 h |
 | `LOW_CONFIDENCE` | The reader was unsure; values shown for review | every 6 h |
-| `CREDIT_NOTE` | Supplier credit note (manual for now, see backlog) | no |
+| `CREDIT_NOTE` / `CREDIT_TOTAL_MISMATCH` | Credit note unreadable / Books priced the credit differently from the printed total (draft removed) | no / every 6 h |
 | `NOT_AN_INVOICE` / `UNSUPPORTED_FILE` / `PAGE_LIMIT` | Statement, delivery note, non-PDF, catalogue… | no |
 | `AI_ERROR` / `BOOKS_ERROR` / `ATTACH_FAILED` | Service error | next run |
 
 ## Configuration
 
-All tunables are environment variables (`.env` locally, Catalyst env vars deployed — see `.env.example`). The ones finance will care about: `TOTAL_TOLERANCE` (GBP, default 1.00), `BILL_ADJUST_TO_INVOICE` (default true), `RETRY_AFTER_HOURS` (6) × `MAX_ATTEMPTS` (28), `MAX_NEW_PER_RUN` (40), `DRY_RUN`, `MAIL_TRANSPORT` (`log` | `smtp` | `catalyst`).
+All tunables are environment variables (`.env` locally, Catalyst env vars deployed — see `.env.example`). The ones finance will care about: `TOTAL_TOLERANCE` (GBP, default 1.00), `BILL_ADJUST_TO_INVOICE` (default true), `RETRY_AFTER_HOURS` (6) × `MAX_ATTEMPTS` (28), `MAX_NEW_PER_RUN` (40), `DRY_RUN`, `MAIL_TRANSPORT` (`log` | `smtp` | `catalyst`), `DAILY_REPORT_HOUR` (17, `off` to disable), `REPORT_PER_RUN` (false), `PO_PREFIX` / `PO_PAD_WIDTH` (the Books PO numbering, e.g. `PR-` / 5).
 
 ## Backlog (agreed with the client, not started)
 
-- **End-of-day report email**: one email per day — bills created with Books links, amount mismatches, unmatched POs — as a clean HTML dashboard; needs the client's mailbox (`MAIL_TRANSPORT=smtp`). The per-run report stays in the log.
-- **Credit notes**: suppliers send them with the PO number, sometimes against a specific bill → vendor credit in Books linked to the bill when bill + PO are found, otherwise to the PO only, and the report says it is not linked to a bill.
+- **Report mailbox**: the daily email is built and tested; it goes to the log until the client provides a mailbox (`MAIL_TRANSPORT=smtp`).
+- **Credit notes — live check**: implemented and unit-tested; the vendor-credit attachment endpoint and the apply-to-bill call are verified on the sandbox with the `exact-CN` / `partial-CN` test documents.
 - **Phase 2**: vendor carriage rules, line-level matching by MPN, partial bills from invoiced quantities (seed scenarios already exist, `PHASE2_ENABLED=false`).
 - **Golden set**: real supplier invoices from the client through the sandbox before UAT.
 

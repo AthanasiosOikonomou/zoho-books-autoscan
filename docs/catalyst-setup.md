@@ -62,6 +62,8 @@ Console → the project → Development → **Data Store → New Table**. Column
 | tokens_out | Integer | |
 | run_id | Text, max 40 | |
 | claimed_run_id | Text, max 40 | |
+| credit_id | Text, max 50 | vendor credit created from a supplier credit note |
+| credit_number | Text, max 100 | |
 
 ### `run_log`
 
@@ -122,6 +124,12 @@ A run that is skipped with `run.skipped_active_run` means a `run_log` row is sti
 ## 7. Cron
 
 **Job Scheduling → Crons → Create**: name `autoscan-every-30m`, *Periodic*, every 30 minutes, target pool `autoscan-pool` → function `autoscan-run`, enable. Restrict to business hours if the UI allows (Mon–Fri 07:00–19:00 Europe/London); otherwise leave 24/7 — an empty run costs nothing measurable (a few ZCQL calls, no Claude call).
+
+## 7b. Daily report
+
+No extra cron is needed: the first run after `DAILY_REPORT_HOUR` (default 17, `REPORT_TIMEZONE` Europe/London) sends the end-of-day digest through `MAIL_TRANSPORT` and writes a `daily_<date>` marker row in `run_log`, so it goes out once per day. Make sure the 30-min cron still fires after that hour (e.g. business hours until 19:00).
+
+To send it on demand (or test it): **Job Scheduling → Jobs → Submit Job** → function `autoscan-run` → params `{"mode":"daily_report","force":"true"}` (`force` re-sends even if today's already went out). With `MAIL_TRANSPORT=log` the text version lands in the function log; the HTML can be previewed locally with `npm run run -- --daily-report` (writes `out/daily-<date>.html` from the local state file).
 
 ## 8. Promote to Production (go-live, later)
 

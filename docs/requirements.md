@@ -17,8 +17,8 @@ What the client's finance lead confirmed in writing, and where each point stands
 Additional rules from the project lead (4 Nov 2026):
 
 - Total tolerance **£1** on the invoice total; the bill carries the **invoice** total (difference to PO-priced lines posted as the bill's adjustment). Done.
-- Credit notes (always with the PO number, sometimes against a specific bill): create a **vendor credit** in Books — linked to the bill when the bill and PO are found, otherwise to the PO only — and say in the report "credit note X created, not linked to any bill". Flagged as `CREDIT_NOTE` until built (next phase).
+- Credit notes (always with the PO number, sometimes against a specific bill): create a **vendor credit** in Books — linked to the bill when the bill and PO are found, otherwise to the PO only — and say in the report "credit note X created, not linked to any bill". **Done** (`src/pipeline/creditNote.js`); live check pending on the sandbox.
 - Books API budget is not a constraint: the client's Zoho One plan allows 10,000 calls/day plus a 200,000/day add-on.
 - UAT exit: the client (project coordinator + accountant) switches the old Deluge schedule off only after UAT with all findings resolved.
-- One **end-of-day** report email with bills created (links), amount mismatches and unmatched POs, as a clean HTML dashboard — once the client's mailbox exists.
+- One **end-of-day** report email with bills created (links), amount mismatches and unmatched POs, as a clean HTML dashboard. **Done** (`src/report/daily.js`); goes to the log until the client's mailbox exists.
 - Fixing a PO hours or days later must bill the document automatically without extra AI cost. Done (stored extraction, 6 h × 28).

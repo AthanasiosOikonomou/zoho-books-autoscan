@@ -49,7 +49,11 @@ const ITEMS = [
 // scenario: what the PO looks like, and what invoice(s) the generator should produce for it
 const POS = [
   { key: 'exact', vendor: 'rustoleum', number: null, reference: null, lines: [['combi25', 4], ['combi1', 6]], carriage: 10,
-    invoices: [{ suffix: 'A', label: 'Exact match', refStyle: 'zoho', lines: 'all', carriage: 10 }] },
+    invoices: [
+      { suffix: 'A', label: 'Exact match', refStyle: 'zoho', lines: 'all', carriage: 10 },
+      { suffix: 'CN', kind: 'credit_note', label: 'Credit note against invoice A (1 × combi25 returned) → vendor credit applied to that bill', refStyle: 'zoho', lines: { combi25: 1, combi1: 0 }, carriage: 0, againstInvoice: 'A' },
+      { suffix: 'CN-copy', kind: 'credit_note', label: 'Same credit note emailed twice → DUPLICATE', refStyle: 'zoho', lines: { combi25: 1, combi1: 0 }, carriage: 0, againstInvoice: 'A', sameInvoiceNumberAs: 'CN' },
+    ] },
   { key: 'legacy', vendor: 'rustoleum', number: null, reference: 'IPO/316037', lines: [['combi25', 10]], carriage: 0,
     invoices: [{ suffix: 'A', label: 'Legacy IPO/ reference', refStyle: 'legacy', lines: 'all', carriage: 0 }] },
   { key: 'embedded', vendor: 'harlow', number: null, reference: 'IPO 317792', lines: [['roller', 20], ['tape', 5]], carriage: 8.5,
@@ -66,6 +70,7 @@ const POS = [
     invoices: [
       { suffix: 'A', label: 'Partial delivery 1 of 2', refStyle: 'zoho', lines: { primer5: 6, emul10: 0 }, carriage: 0 },
       { suffix: 'B', label: 'Partial delivery 2 of 2 (closing)', refStyle: 'zoho', lines: { primer5: 4, emul10: 6 }, carriage: 0 },
+      { suffix: 'CN', kind: 'credit_note', label: 'Credit note with PO ref only; PO has two bills → vendor credit on the PO, reported as not linked', refStyle: 'zoho', lines: { primer5: 2, emul10: 0 }, carriage: 0 },
     ] },
   { key: 'overqty', vendor: 'crown', number: null, reference: null, lines: [['emul10', 3]], carriage: 0,
     invoices: [{ suffix: 'A', label: 'Quantity exceeds PO', refStyle: 'zoho', lines: { emul10: 5 }, carriage: 0 }] },
@@ -80,6 +85,8 @@ const POS = [
     invoices: [{ suffix: 'A', label: 'Invoice without any PO reference → NO_PO_REF', refStyle: 'none', lines: 'all', carriage: 0 }] },
   { key: 'terms', vendor: 'harlow', number: null, reference: null, lines: [['roller', 3]], carriage: 0,
     invoices: [{ suffix: 'A', label: 'Exact match; bill must inherit the PO payment terms (Net 60)', refStyle: 'zoho', lines: 'all', carriage: 0 }] },
+  { key: 'rounding', vendor: 'rustoleum', number: null, reference: null, lines: [['combi1', 7]], carriage: 0,
+    invoices: [{ suffix: 'A', label: 'Unit price +0.05 → invoice 42p over the PO, inside the £1 tolerance → BILLED with the invoice total (bill adjustment)', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { combi1: 0.05 } }] },
 ];
 
 (async () => {
