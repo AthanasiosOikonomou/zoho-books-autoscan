@@ -77,8 +77,17 @@ function loadConfig(env = process.env) {
     report: {
       to: list(env.REPORT_TO, []),
       devCopy: list(env.REPORT_DEV_COPY, []),
-      from: env.REPORT_FROM || '',
+      from: env.REPORT_FROM || env.SMTP_USER || '',
       subjectPrefix: env.REPORT_SUBJECT_PREFIX || 'AutoScan',
+      // catalyst = Catalyst Mail (sender/domain verified in the Console) | smtp = any SMTP account (e.g. Zoho Mail + app password)
+      transport: String(env.MAIL_TRANSPORT || 'catalyst').toLowerCase(),
+      smtp: {
+        host: env.SMTP_HOST || 'smtp.zoho.eu',
+        port: num(env.SMTP_PORT, 465),
+        secure: bool(env.SMTP_SECURE, true), // true = implicit TLS (465); false = STARTTLS (587)
+        user: env.SMTP_USER || '',
+        pass: env.SMTP_PASS || '',
+      },
       booksAppBase: env.BOOKS_APP_BASE || `https://books.zoho.${env.BOOKS_DC || 'eu'}/app/${env.BOOKS_ORG_ID || ''}`,
     },
 
@@ -99,6 +108,13 @@ function assertRuntimeConfig(cfg) {
   if (!cfg.books.clientSecret) missing.push('BOOKS_CLIENT_SECRET');
   if (!cfg.books.refreshToken) missing.push('BOOKS_REFRESH_TOKEN');
   if (!cfg.claude.apiKey) missing.push('ANTHROPIC_API_KEY');
+  if (!['catalyst', 'smtp'].includes(cfg.report.transport)) {
+    throw new Error(`MAIL_TRANSPORT must be "catalyst" or "smtp" (got "${cfg.report.transport}")`);
+  }
+  if (cfg.report.transport === 'smtp') {
+    if (!cfg.report.smtp.user) missing.push('SMTP_USER');
+    if (!cfg.report.smtp.pass) missing.push('SMTP_PASS');
+  }
   if (missing.length) {
     throw new Error(`Missing required configuration: ${missing.join(', ')}`);
   }

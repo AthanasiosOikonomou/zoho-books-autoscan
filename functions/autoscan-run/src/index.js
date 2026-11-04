@@ -12,7 +12,7 @@ const { createTokenProvider } = require('./books/oauth');
 const { createBooksClient } = require('./books/client');
 const { createExtractor } = require('./claude/extractor');
 const { CatalystStore } = require('./state/store');
-const { createCatalystMailer } = require('./report/mailers');
+const { createMailer } = require('./report/mailers');
 const { runAutoscan } = require('./pipeline/run');
 
 module.exports = async (jobRequest, context) => {
@@ -28,7 +28,7 @@ module.exports = async (jobRequest, context) => {
     const books = createBooksClient({ config: config.books, tokenProvider, logger });
     const extractor = createExtractor({ client: new Anthropic({ apiKey: config.claude.apiKey }), config: config.claude, logger });
     const store = new CatalystStore({ app, logger });
-    const mailer = createCatalystMailer({ app, logger });
+    const mailer = createMailer({ config, app, logger });
 
     const summary = await runAutoscan({ config, books, extractor, store, mailer, logger, deadlineAt });
     logger.info('job.finished', { run_id: summary.run_id, status: summary.status, skipped: !!summary.skipped });

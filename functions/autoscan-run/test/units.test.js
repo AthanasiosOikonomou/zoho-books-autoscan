@@ -10,7 +10,8 @@ const { parseAmount } = require('../src/util/money');
 const { normaliseExtraction } = require('../src/claude/schema');
 const { createRateLimiter, mapWithConcurrency } = require('../src/util/limiter');
 const { buildBillPayload, paymentTermsFromPo } = require('../src/pipeline/bill');
-const { loadConfig } = require('../src/config');
+const { loadConfig, assertRuntimeConfig } = require('../src/config');
+const { createSmtpMailer, createMailer } = require('../src/report/mailers');
 
 test('matchTotals: within tolerance on PO total', () => {
   const m = matchTotals({ invoiceGross: 120.01, poTotal: 120.0, tolerance: 0.02 });
@@ -113,4 +114,39 @@ test('config defaults are safe (dry-run on)', () => {
   const c = loadConfig({});
   assert.equal(c.run.dryRun, true); assert.equal(c.matching.totalTolerance, 0.02); assert.equal(c.books.ratePerMin, 80);
   assert.equal(loadConfig({ DRY_RUN: 'false' }).run.dryRun, false);
+});
+
+test('smtp mailer: sends through the injected transport with from/to/cc/subject/html/text', async () => {
+  const calls = [];
+  const transport = { async sendMail(m) { calls.push(m); return { messageId: '<x@y>' }; } };
+  const logs = [];
+  const logger = { info: (e, d) => logs.push([e, d]), warn: (e) => logs.push([e]) };
+  const m = createSmtpMailer({ smtp: { user: 'bot@example.test' }, logger, transport });
+  await m.send({ to: ['fin@example.test'], cc: ['dev@example.test'], subject: 'S', html: '<b>h</b>', text: 't', from: '' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].from, 'bot@example.test');
+  assert.deepEqual(calls[0].to, ['fin@example.test']);
+  assert.deepEqual(calls[0].cc, ['dev@example.test']);
+  assert.equal(calls[0].html, '<b>h</b>');
+  assert.equal(logs[0][0], 'mail.sent');
+});
+test('smtp mailer: no recipients → nothing sent', async () => {
+  const transport = { async sendMail() { throw new Error('must not be called'); } };
+  const m = createSmtpMailer({ smtp: {}, logger: { warn() {}, info() {} }, transport });
+  await m.send({ to: [], subject: 'S', html: '' });
+});
+test('config: MAIL_TRANSPORT=smtp requires SMTP_USER/SMTP_PASS and defaults REPORT_FROM to SMTP_USER', () => {
+  const base = { BOOKS_ORG_ID: '1', BOOKS_CLIENT_ID: 'c', BOOKS_CLIENT_SECRET: 's', BOOKS_REFRESH_TOKEN: 'r', ANTHROPIC_API_KEY: 'k' };
+  assert.throws(() => assertRuntimeConfig(loadConfig({ ...base, MAIL_TRANSPORT: 'smtp' })), /SMTP_USER, SMTP_PASS/);
+  const cfg = assertRuntimeConfig(loadConfig({ ...base, MAIL_TRANSPORT: 'smtp', SMTP_USER: 'bot@example.test', SMTP_PASS: 'p' }));
+  assert.equal(cfg.report.from, 'bot@example.test');
+  assert.equal(cfg.report.smtp.host, 'smtp.zoho.eu'); assert.equal(cfg.report.smtp.port, 465); assert.equal(cfg.report.smtp.secure, true);
+  assert.throws(() => assertRuntimeConfig(loadConfig({ ...base, MAIL_TRANSPORT: 'pigeon' })), /MAIL_TRANSPORT/);
+  assert.equal(loadConfig(base).report.transport, 'catalyst');
+});
+test('createMailer: picks smtp vs catalyst by config', () => {
+  const logger = { info() {}, warn() {} };
+  const smtpCfg = loadConfig({ MAIL_TRANSPORT: 'smtp', SMTP_USER: 'u', SMTP_PASS: 'p' });
+  assert.equal(typeof createMailer({ config: smtpCfg, app: null, logger }).send, 'function');
+  assert.equal(typeof createMailer({ config: loadConfig({}), app: { email() { return {}; } }, logger }).send, 'function');
 });

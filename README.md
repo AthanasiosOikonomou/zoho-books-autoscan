@@ -43,7 +43,7 @@ The pipeline tests prove with fakes: new documents processed first; exceptions n
 
 ## Deploy (Catalyst, Development env)
 
-See [`docs/catalyst-setup.md`](docs/catalyst-setup.md) for the one-time setup (CLI, `catalyst init`, Data Store tables, Mail sender, cron). After that:
+See [`docs/catalyst-setup.md`](docs/catalyst-setup.md) for the one-time setup (CLI, `catalyst init`, Data Store tables, report email (SMTP or Catalyst Mail), cron). After that:
 
 ```bash
 npm run deploy        # generates functions/autoscan-run/catalyst-config.json from .env (env vars ride inside it) and deploys the function

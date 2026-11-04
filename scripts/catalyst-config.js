@@ -28,15 +28,18 @@ const DEPLOY_VARS = [
   'TOTAL_TOLERANCE', 'CONFIDENCE_THRESHOLD', 'PO_PREFIX', 'PO_PAD_WIDTH', 'PO_LEGACY_PREFIXES', 'MATCH_AGAINST_REMAINING', 'PHASE2_ENABLED',
   'DRY_RUN', 'MAX_NEW_PER_RUN', 'MAX_RETRY_PER_RUN', 'CONCURRENCY', 'RETRY_AFTER_HOURS', 'MAX_ATTEMPTS', 'TIME_BUDGET_RATIO', 'LOCK_STALE_MINUTES',
   'REPORT_TO', 'REPORT_DEV_COPY', 'REPORT_FROM', 'REPORT_SUBJECT_PREFIX', 'BOOKS_APP_BASE',
+  'MAIL_TRANSPORT', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASS',
   'LOG_LEVEL',
 ];
-const REQUIRED = ['BOOKS_ORG_ID', 'BOOKS_CLIENT_ID', 'BOOKS_CLIENT_SECRET', 'BOOKS_REFRESH_TOKEN', 'ANTHROPIC_API_KEY', 'REPORT_TO', 'REPORT_FROM'];
+const REQUIRED = ['BOOKS_ORG_ID', 'BOOKS_CLIENT_ID', 'BOOKS_CLIENT_SECRET', 'BOOKS_REFRESH_TOKEN', 'ANTHROPIC_API_KEY', 'REPORT_TO'];
+// Mail: smtp needs the SMTP account; catalyst needs a sender verified in the Console.
+const MAIL_REQUIRED = (process.env.MAIL_TRANSPORT || 'catalyst').toLowerCase() === 'smtp' ? ['SMTP_USER', 'SMTP_PASS'] : ['REPORT_FROM'];
 
 const check = process.argv.includes('--check');
 const example = JSON.parse(fs.readFileSync(EXAMPLE, 'utf8'));
 const env = {};
 for (const k of DEPLOY_VARS) if (process.env[k] !== undefined && process.env[k] !== '') env[k] = String(process.env[k]);
-const missing = REQUIRED.filter((k) => !env[k]);
+const missing = [...REQUIRED, ...MAIL_REQUIRED].filter((k) => !env[k]);
 if (missing.length) { console.error(`Missing in .env: ${missing.join(', ')}`); process.exit(2); }
 if (env.DRY_RUN !== 'false') console.log('Note: DRY_RUN is not "false" — the deployed function will run in dry-run mode (correct until UAT sign-off).');
 

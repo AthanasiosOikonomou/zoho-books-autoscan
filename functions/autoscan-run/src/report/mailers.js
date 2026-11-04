@@ -37,4 +37,40 @@ function createFileMailer({ outDir, logger }) {
   };
 }
 
-module.exports = { createCatalystMailer, createFileMailer };
+/**
+ * SMTP via nodemailer — e.g. Zoho Mail (smtp.zoho.eu:465) with an app-specific password.
+ * Needs no Catalyst sender/domain verification. `transport` can be injected for tests.
+ */
+function createSmtpMailer({ smtp, logger, transport }) {
+  const tx = transport || require('nodemailer').createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.secure,
+    auth: { user: smtp.user, pass: smtp.pass },
+    connectionTimeout: 15000,
+    socketTimeout: 30000,
+  });
+  return {
+    async send(report) {
+      const to = report.to || [];
+      if (!to.length) { logger.warn('mail.no_recipients'); return; }
+      const info = await tx.sendMail({
+        from: report.from || smtp.user, // Zoho Mail rejects a From that is not the account or one of its aliases
+        to,
+        cc: report.cc && report.cc.length ? report.cc : undefined,
+        subject: report.subject,
+        html: report.html,
+        text: report.text,
+      });
+      logger.info('mail.sent', { transport: 'smtp', to: to.length, subject: report.subject, message_id: info && info.messageId });
+    },
+  };
+}
+
+/** Picks the mailer from config.report.transport. */
+function createMailer({ config, app, logger }) {
+  if (config.report.transport === 'smtp') return createSmtpMailer({ smtp: config.report.smtp, logger });
+  return createCatalystMailer({ app, logger });
+}
+
+module.exports = { createCatalystMailer, createSmtpMailer, createFileMailer, createMailer };
