@@ -125,4 +125,4 @@ A run that is skipped with `run.skipped_active_run` means a `run_log` row is sti
 
 ## 8. Promote to Production (go-live, later)
 
-Create the same two tables in Production, switch `.env` to production values (Books org, `PO_PAD_WIDTH=6` — production PO numbers are 6 digits, production API key named `autoscan-production` from a **service account**, `REPORT_TO` = the finance inbox, the client's own SMTP mailbox + app password (or `MAIL_TRANSPORT=catalyst` with their verified domain), `DRY_RUN=false`), `npm run deploy` against Production, enable the cron, and switch off the old Deluge schedule.
+Create the same two tables in Production, switch `.env` to production values (Books org, `PO_PREFIX=PR-`, `PO_PAD_WIDTH=5` — production Books POs are numbered like `PR-00123`, production API key named `autoscan-production` from a **service account**, `REPORT_TO` = the finance inbox, the client's own SMTP mailbox + app password (or `MAIL_TRANSPORT=catalyst` with their verified domain), `DRY_RUN=false`), `npm run deploy` against Production, enable the cron, and switch off the old Deluge schedule.

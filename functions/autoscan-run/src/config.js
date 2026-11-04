@@ -58,6 +58,7 @@ function loadConfig(env = process.env) {
       poPrefix: env.PO_PREFIX || 'PO-',
       poPadWidth: num(env.PO_PAD_WIDTH, 5), // PO-00235
       legacyPrefixes: list(env.PO_LEGACY_PREFIXES, ['IPO/', 'IPO ', 'IPO-']),
+      poExample: env.PO_EXAMPLE || `${env.PO_PREFIX || 'PO-'}${'235'.padStart(num(env.PO_PAD_WIDTH, 5), '0')}`, // shown to the model as "the Books format" (production: PR-00123)
       compareAgainstRemaining: bool(env.MATCH_AGAINST_REMAINING, true),
       phase2Enabled: bool(env.PHASE2_ENABLED, false),
     },

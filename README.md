@@ -79,7 +79,7 @@ All tunables are environment variables (`.env` locally, Catalyst env vars deploy
 ## Backlog (agreed with the client, not started)
 
 - **End-of-day report email**: one email per day — bills created with Books links, amount mismatches, unmatched POs — as a clean HTML dashboard; needs the client's mailbox (`MAIL_TRANSPORT=smtp`). The per-run report stays in the log.
-- **Credit notes**: suppliers send them with the PO number, sometimes against a specific bill → vendor credit in Books, applied to the bill when identifiable.
+- **Credit notes**: suppliers send them with the PO number, sometimes against a specific bill → vendor credit in Books linked to the bill when bill + PO are found, otherwise to the PO only, and the report says it is not linked to a bill.
 - **Phase 2**: vendor carriage rules, line-level matching by MPN, partial bills from invoiced quantities (seed scenarios already exist, `PHASE2_ENABLED=false`).
 - **Golden set**: real supplier invoices from the client through the sandbox before UAT.
 

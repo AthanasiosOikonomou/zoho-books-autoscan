@@ -26,7 +26,7 @@ module.exports = async (jobRequest, context) => {
 
     const tokenProvider = createTokenProvider(config.books);
     const books = createBooksClient({ config: config.books, tokenProvider, logger });
-    const extractor = createExtractor({ client: new Anthropic({ apiKey: config.claude.apiKey }), config: config.claude, logger });
+    const extractor = createExtractor({ client: new Anthropic({ apiKey: config.claude.apiKey }), config: config.claude, poExample: config.matching.poExample, logger });
     const store = new CatalystStore({ app, logger });
     const mailer = createMailer({ config, app, logger });
 

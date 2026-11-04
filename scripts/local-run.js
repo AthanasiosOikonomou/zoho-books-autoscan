@@ -48,7 +48,7 @@ const { runAutoscan } = fn('pipeline/run');
   const logger = createLogger({ level: process.env.LOG_LEVEL || 'info' });
   const tokenProvider = createTokenProvider(config.books);
   const books = createBooksClient({ config: config.books, tokenProvider, logger });
-  const extractor = createExtractor({ client: new Anthropic({ apiKey: config.claude.apiKey }), config: config.claude, logger });
+  const extractor = createExtractor({ client: new Anthropic({ apiKey: config.claude.apiKey }), config: config.claude, poExample: config.matching.poExample, logger });
   const store = new JsonFileStore({ filePath: path.resolve(config.local.stateFile) });
   const mailer = createFileMailer({ outDir: path.resolve(config.local.outDir), logger });
 

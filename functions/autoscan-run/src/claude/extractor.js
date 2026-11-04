@@ -37,9 +37,13 @@ function buildContentBlock(buffer, mime) {
  */
 function promptVersionOf(text) { return crypto.createHash('sha256').update(text).digest('hex').slice(0, 12); }
 
-function createExtractor({ client, config, logger }) {
-  const systemPrompt = loadPrompt();
-  const promptVersion = promptVersionOf(systemPrompt);
+function renderPrompt(template, vars = {}) {
+  return template.replace(/\{\{(\w+)\}\}/g, (m, k) => (vars[k] !== undefined && vars[k] !== null ? String(vars[k]) : m));
+}
+
+function createExtractor({ client, config, logger, poExample }) {
+  const systemPrompt = renderPrompt(loadPrompt(), { PO_EXAMPLE: poExample || 'PO-00235' });
+  const promptVersion = promptVersionOf(systemPrompt); // rendered text → a different PO format is a different prompt version
 
   async function callModel(model, buffer, mime) {
     const system = config.promptCache
@@ -116,4 +120,4 @@ function estimateCostUsd(usage) {
   return (inTok * p.in + (usage.cache_read_input_tokens || 0) * p.cacheRead + (usage.output_tokens || 0) * p.out) / 1e6;
 }
 
-module.exports = { createExtractor, estimateCostUsd, loadPrompt, promptVersionOf };
+module.exports = { createExtractor, estimateCostUsd, loadPrompt, promptVersionOf, renderPrompt };

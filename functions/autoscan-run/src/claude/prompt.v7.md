@@ -44,7 +44,7 @@ Do not use numbers tied to: Invoice No / Supplier Invoice, Our Order No / Sales 
 
 **The supplier's own order number is not a PO reference.** A field labelled just `Order No`, `Order Number`, `Order Ref`, `Our Order`, `Sales Order` or `SO` — without `Your`, `Customer` or `PO` in the label — is the supplier's internal sales-order number (typically near their invoice number, often formatted like `S001376`, `SO-77812`). Never return it as `po_reference`, even when nothing else is printed: return `null` instead.
 
-What a genuine customer PO reference looks like for this customer: `PO-00235` (Books format), `IPO/316037` or `IPO 316037` (legacy), or a bare 6-digit number such as `316037`. A value under a generic label is acceptable as PO reference only if it matches one of these shapes.
+What a genuine customer PO reference looks like for this customer: `{{PO_EXAMPLE}}` (Books format — prefix plus zero-padded number; the digits may also appear without the prefix or without the leading zeros), `IPO/316037` or `IPO 316037` (legacy), or a bare 6-digit number such as `316037`. A value under a generic label is acceptable as PO reference only if it matches one of these shapes.
 
 Priority:
 1. A value beside an explicit PO / customer-order label.
@@ -144,7 +144,7 @@ Net Amount 140.96   VAT 28.19   Gross Amount 169.15 GBP
 ### Example E — Zoho-style PO number
 ```
 Inv. No.: AR26000482   from: 14.01.2026
-Your order: PO-00235
+Your order: {{PO_EXAMPLE}}
 Total amount [GBP] 238.03 incl. VAT
 ```
-→ invoice_number `AR26000482`, po_reference `PO-00235`, invoice_date `2026-01-14`, totals.gross 238.03, confidence 0.96.
+→ invoice_number `AR26000482`, po_reference `{{PO_EXAMPLE}}`, invoice_date `2026-01-14`, totals.gross 238.03, confidence 0.96.

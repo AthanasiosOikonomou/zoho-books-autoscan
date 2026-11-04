@@ -13,6 +13,7 @@ const { buildBillPayload, billAdjustment, paymentTermsFromPo } = require('../src
 const { loadConfig, assertRuntimeConfig } = require('../src/config');
 const { createSmtpMailer, createMailer } = require('../src/report/mailers');
 const { createLogger, describeError, errorMessage } = require('../src/logger');
+const { createExtractor, renderPrompt, loadPrompt } = require('../src/claude/extractor');
 const { JsonFileStore } = require('../src/state/store');
 
 test('matchTotals: within tolerance on PO total', () => {
@@ -219,4 +220,13 @@ test('config defaults: £1 tolerance, 6 h retry window, 28 attempts, adjustment 
   const c = loadConfig({});
   assert.equal(c.matching.totalTolerance, 1); assert.equal(c.matching.billAdjustToInvoice, true);
   assert.equal(c.run.retryAfterHours, 6); assert.equal(c.run.maxAttempts, 28);
+});
+
+test('prompt: the Books PO format is rendered from config and changes the prompt version', () => {
+  assert.equal(renderPrompt('x {{PO_EXAMPLE}} y {{UNKNOWN}}', { PO_EXAMPLE: 'PR-00123' }), 'x PR-00123 y {{UNKNOWN}}');
+  assert.ok(loadPrompt().includes('{{PO_EXAMPLE}}'), 'template keeps the placeholder');
+  const mk = (ex) => createExtractor({ client: {}, config: loadConfig({ PO_PREFIX: 'PR-', PO_PAD_WIDTH: '5' }).claude, logger: {}, poExample: ex });
+  assert.notEqual(mk('PR-00123').promptVersion, mk('PO-00235').promptVersion);
+  assert.equal(loadConfig({ PO_PREFIX: 'PR-', PO_PAD_WIDTH: '5' }).matching.poExample, 'PR-00235');
+  assert.equal(loadConfig({ PO_EXAMPLE: 'PR-00123' }).matching.poExample, 'PR-00123');
 });
