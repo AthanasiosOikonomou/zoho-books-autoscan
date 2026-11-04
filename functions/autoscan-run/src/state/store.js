@@ -179,13 +179,37 @@ class CatalystStore {
       if (existing[0]) rowId = existing[0].ROWID;
     }
     if (rowId) {
-      await table.updateRow({ ROWID: rowId, ...row });
+      const updated = await this._write('update', () => table.updateRow({ ROWID: String(rowId), ...row }), { document_id: record.document_id, status: row.status, rowid: String(rowId), columns: Object.keys(row).length });
+      this._assertWritten(updated, 'document_state', rowId, row);
     } else {
-      const inserted = await table.insertRow(row);
-      rowId = inserted.ROWID;
+      const inserted = await this._write('insert', () => table.insertRow(row), { document_id: record.document_id, status: row.status, columns: Object.keys(row).length });
+      rowId = inserted && inserted.ROWID;
+      if (!rowId) throw new Error(`document_state insert returned no ROWID: ${JSON.stringify(inserted).slice(0, 300)}`);
     }
     this.rowIds.set(record.document_id, rowId);
     return { ...record, ROWID: rowId };
+  }
+
+  /** Runs a Data Store write, logging the outcome; SDK rejections are plain strings, so they are wrapped into Errors here. */
+  async _write(op, fn, meta) {
+    try {
+      const res = await fn();
+      this.logger.debug('store.write', { op, ...meta, resp_rowid: res && res.ROWID, resp_modified: res && res.MODIFIEDTIME });
+      return res;
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(typeof err === 'string' ? err : JSON.stringify(err).slice(0, 500));
+      e.code = e.code || 'CATALYST_DS';
+      this.logger.error('store.write_failed', { op, ...meta, error: e });
+      throw e;
+    }
+  }
+
+  /** The Data Store answers an update with the updated row; anything else means the row was NOT changed. */
+  _assertWritten(res, table, rowId, row) {
+    if (res && String(res.ROWID) === String(rowId)) return;
+    const e = new Error(`${table} update of ROWID ${rowId} was not applied (response: ${JSON.stringify(res).slice(0, 300)}; columns: ${Object.keys(row).join(',')})`);
+    e.code = 'CATALYST_DS';
+    throw e;
   }
 
   async listRetryCandidates({ olderThan, transientOlderThan, maxAttempts, limit }) {
@@ -207,13 +231,15 @@ class CatalystStore {
 
   async beginRun(run) {
     const row = this._toRow({ ...run, status: 'RUNNING' }, RUN_FIELDS, RUN_DATETIME_FIELDS);
-    const inserted = await this.ds.table('run_log').insertRow(row);
+    const inserted = await this._write('insert', () => this.ds.table('run_log').insertRow(row), { run_id: run.run_id, columns: Object.keys(row).length });
+    if (!inserted || !inserted.ROWID) throw new Error(`run_log insert returned no ROWID: ${JSON.stringify(inserted).slice(0, 300)}`);
     return { ...run, status: 'RUNNING', ROWID: inserted.ROWID };
   }
 
   async endRun(run) {
     const row = this._toRow(run, RUN_FIELDS, RUN_DATETIME_FIELDS);
-    await this.ds.table('run_log').updateRow({ ROWID: run.ROWID, ...row });
+    const updated = await this._write('update', () => this.ds.table('run_log').updateRow({ ROWID: String(run.ROWID), ...row }), { run_id: run.run_id, status: row.status, rowid: String(run.ROWID), columns: Object.keys(row).length });
+    this._assertWritten(updated, 'run_log', run.ROWID, row);
     return run;
   }
 }
