@@ -2,7 +2,13 @@
 
 Zoho Books supplier-invoice → bill automation, running on **Zoho Catalyst** (EU DC, the client's account) with **Claude** for document reading. Replaces a previous Deluge scheduled function.
 
-> Status: Phase 1 scaffold. Everything runs in **dry-run** until UAT sign-off. Work in the Books **sandbox** org and the Catalyst **Development** environment only.
+> Status (Nov 2026): **Phase 1 deployed and proven** on the client's Catalyst project (Development env) against the Books sandbox — scan → read → match → bill → report, retries, de-duplication, Data Store state. Report goes to the function log until the client provides a mailbox. Production stays in **dry-run** until UAT sign-off.
+
+## What it does
+
+Every 30 minutes a Catalyst Job function reads the Zoho Books **Documents inbox**, sends each new PDF/JPG/PNG to Claude (Haiku, forced JSON schema, ≈ $0.001 per document), resolves the purchase order it references, checks the invoice total against the PO (or the PO's remaining value when it was part-billed) within **£1**, and creates the **bill from the PO** in Books — bill number = supplier invoice number, bill date = invoice date, bill total = **the invoice total** (any pence difference to the PO-priced lines is posted as the bill's adjustment), the PDF attached, the inbox file deleted only after the attachment is verified. Everything else becomes a reviewable exception with a reason code and an action for finance.
+
+Exceptions are **reconciled automatically**: a document whose PO was missing or wrong is re-checked every 6 h for a week (28 attempts) using the stored extraction — no second AI call — so fixing the PO hours or days later bills it without anyone touching the inbox. Service errors (AI, Books, attachment) retry on the next run. Duplicate supplier invoice numbers are never billed twice; a PO can receive several bills (partial deliveries).
 
 ## Layout
 
@@ -39,7 +45,7 @@ cp .env.example .env
 npm test
 ```
 
-The pipeline tests prove with fakes: new documents processed first; exceptions never re-extracted and only retried after `RETRY_AFTER_HOURS`; dry-run writes nothing; duplicate supplier invoice numbers are never billed twice; a PO with an existing bill still gets a new bill for a different invoice; same file re-uploaded reuses the extraction.
+The pipeline tests prove with fakes: new documents processed first; exceptions never re-extracted and only retried after `RETRY_AFTER_HOURS`; dry-run writes nothing; duplicate supplier invoice numbers are never billed twice; a PO with an existing bill still gets a new bill for a different invoice; same file re-uploaded reuses the extraction; the bill is posted with the invoice total (adjustment) and a differing bill total is flagged; credit notes are their own exception; stale claims from a dead run and transient errors are retried.
 
 ## Deploy (Catalyst, Development env)
 
@@ -51,9 +57,36 @@ npm run deploy        # generates functions/autoscan-run/catalyst-config.json fr
 
 `catalyst-config.json` is git-ignored because it carries the real environment variables; `catalyst-config.example.json` is the committed template.
 
+## Outcomes and reason codes
+
+| Status / reason | Meaning | Retried |
+|---|---|---|
+| `BILLED` | Bill created from the PO, PDF attached, inbox file deleted | — |
+| `WOULD_BILL` | Same, but `DRY_RUN=true` — nothing written | yes |
+| `DUPLICATE` | A bill with this supplier invoice number already exists for the vendor | no |
+| `TOTAL_MISMATCH` | Invoice total differs from the PO (or its remaining value) by more than the tolerance | every 6 h |
+| `PO_NOT_FOUND` / `NO_PO_REF` | PO reference not in Books / not readable on the document | every 6 h |
+| `BILL_TEMPLATE_MISMATCH` | Books would bill a different figure from the PO's remaining quantities | every 6 h |
+| `LOW_CONFIDENCE` | The reader was unsure; values shown for review | every 6 h |
+| `CREDIT_NOTE` | Supplier credit note (manual for now, see backlog) | no |
+| `NOT_AN_INVOICE` / `UNSUPPORTED_FILE` / `PAGE_LIMIT` | Statement, delivery note, non-PDF, catalogue… | no |
+| `AI_ERROR` / `BOOKS_ERROR` / `ATTACH_FAILED` | Service error | next run |
+
+## Configuration
+
+All tunables are environment variables (`.env` locally, Catalyst env vars deployed — see `.env.example`). The ones finance will care about: `TOTAL_TOLERANCE` (GBP, default 1.00), `BILL_ADJUST_TO_INVOICE` (default true), `RETRY_AFTER_HOURS` (6) × `MAX_ATTEMPTS` (28), `MAX_NEW_PER_RUN` (40), `DRY_RUN`, `MAIL_TRANSPORT` (`log` | `smtp` | `catalyst`).
+
+## Backlog (agreed with the client, not started)
+
+- **End-of-day report email**: one email per day — bills created with Books links, amount mismatches, unmatched POs — as a clean HTML dashboard; needs the client's mailbox (`MAIL_TRANSPORT=smtp`). The per-run report stays in the log.
+- **Credit notes**: suppliers send them with the PO number, sometimes against a specific bill → vendor credit in Books, applied to the bill when identifiable.
+- **Phase 2**: vendor carriage rules, line-level matching by MPN, partial bills from invoiced quantities (seed scenarios already exist, `PHASE2_ENABLED=false`).
+- **Golden set**: real supplier invoices from the client through the sandbox before UAT.
+
 ## Rules
 
 - Secrets only in `.env` (local, git-ignored) and Catalyst environment variables. Never in code, never in chat, never in a commit.
 - `DRY_RUN=true` until finance signs off UAT. The old Deluge schedule is switched off by the client at UAT.
 - Nothing is deleted from the inbox unless a bill exists **and** the attachment is verified.
 - The AI reads; the code decides. No model output reaches Books without passing `resolvePo` → dedupe → `matchTotals`.
+- Catalyst ROWIDs are above 2^53: never take a ROWID from an insert/update response (it arrives as a rounded JSON number); read it back through ZCQL (`docs/decisions.md`).

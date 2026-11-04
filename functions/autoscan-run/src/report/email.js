@@ -56,7 +56,7 @@ function buildReport({ run, results, config, stoppedEarly }) {
     h.push(`<table style="border-collapse:collapse;width:100%;font-size:13px">`);
     h.push(`<tr style="background:#f4f4f4"><th align="left" style="padding:4px">Document</th><th align="left" style="padding:4px">Supplier</th><th align="left" style="padding:4px">Invoice #</th><th align="left" style="padding:4px">PO</th><th align="right" style="padding:4px">Total</th><th align="left" style="padding:4px">Links</th></tr>`);
     for (const r of done) {
-      h.push(`<tr><td style="padding:4px;border-top:1px solid #eee">${esc(r.file_name)}</td><td style="padding:4px;border-top:1px solid #eee">${esc(r.po && r.po.vendor)}</td><td style="padding:4px;border-top:1px solid #eee">${esc(r.extracted && r.extracted.invoice_number)}</td><td style="padding:4px;border-top:1px solid #eee">${esc(r.po && r.po.number)}</td><td align="right" style="padding:4px;border-top:1px solid #eee">${money(r.extracted && r.extracted.gross)}</td><td style="padding:4px;border-top:1px solid #eee">${links(r)}</td></tr>`);
+      h.push(`<tr><td style="padding:4px;border-top:1px solid #eee">${esc(r.file_name)}</td><td style="padding:4px;border-top:1px solid #eee">${esc(r.po && r.po.vendor)}</td><td style="padding:4px;border-top:1px solid #eee">${esc(r.extracted && r.extracted.invoice_number)}</td><td style="padding:4px;border-top:1px solid #eee">${esc(r.po && r.po.number)}</td><td align="right" style="padding:4px;border-top:1px solid #eee">${money(r.extracted && r.extracted.gross)}${r.note ? `<div style="color:#b23;font-size:12px">${esc(r.note)}</div>` : ''}</td><td style="padding:4px;border-top:1px solid #eee">${links(r)}</td></tr>`);
     }
     h.push(`</table>`);
   }

@@ -52,7 +52,8 @@ function loadConfig(env = process.env) {
 
     // --- Matching -----------------------------------------------------------
     matching: {
-      totalTolerance: num(env.TOTAL_TOLERANCE, 0.02), // GBP
+      totalTolerance: num(env.TOTAL_TOLERANCE, 1.0), // GBP — client rule: £1 on the invoice total
+      billAdjustToInvoice: bool(env.BILL_ADJUST_TO_INVOICE, true), // the bill carries the invoice total, not the PO's: difference goes into Books' `adjustment`
       confidenceThreshold: num(env.CONFIDENCE_THRESHOLD, 0.75),
       poPrefix: env.PO_PREFIX || 'PO-',
       poPadWidth: num(env.PO_PAD_WIDTH, 5), // PO-00235
@@ -67,9 +68,9 @@ function loadConfig(env = process.env) {
       maxNewPerRun: num(env.MAX_NEW_PER_RUN, 40),
       maxRetryPerRun: num(env.MAX_RETRY_PER_RUN, 20),
       concurrency: num(env.CONCURRENCY, 3),
-      retryAfterHours: num(env.RETRY_AFTER_HOURS, 12), // human-fixable exceptions (PO missing, total mismatch…)
+      retryAfterHours: num(env.RETRY_AFTER_HOURS, 6), // human-fixable exceptions (PO missing, total mismatch…): re-checked every 6 h, no AI call
       retryTransientAfterMinutes: num(env.RETRY_TRANSIENT_AFTER_MINUTES, 0), // AI/Books/attach errors: 0 = next run
-      maxAttempts: num(env.MAX_ATTEMPTS, 5),
+      maxAttempts: num(env.MAX_ATTEMPTS, 28), // 28 × 6 h = a week of automatic reconciliation after the PO is fixed
       timeBudgetRatio: num(env.TIME_BUDGET_RATIO, 0.7),
       lockStaleMinutes: num(env.LOCK_STALE_MINUTES, 15),
     },

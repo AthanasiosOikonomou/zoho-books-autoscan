@@ -12,7 +12,7 @@ const { sha256 } = require('../util/hash');
 const { estimateCostUsd } = require('../claude/extractor');
 
 // Reasons that come from the *reading* of the document: when the prompt changes, read again.
-const EXTRACTION_REASONS = new Set(['NO_PO_REF', 'LOW_CONFIDENCE', 'PO_NOT_FOUND', 'NOT_AN_INVOICE', 'AI_ERROR', 'UNSUPPORTED_FILE']);
+const EXTRACTION_REASONS = new Set(['NO_PO_REF', 'LOW_CONFIDENCE', 'PO_NOT_FOUND', 'NOT_AN_INVOICE', 'CREDIT_NOTE', 'AI_ERROR', 'UNSUPPORTED_FILE']);
 
 /**
  * Process ONE inbox document end to end. Never throws: every outcome is a
@@ -98,6 +98,9 @@ async function processDocument(ctx, doc, prior) {
     result.extracted = summarise(extraction);
     Object.assign(rec, { invoice_number: extraction.invoice_number, invoice_date: extraction.invoice_date, invoice_gross: extraction.totals.gross, vendor_name: extraction.supplier_name });
 
+    if (extraction.document_type === 'credit_note') {
+      return finish(STATUS.EXCEPTION, reason('CREDIT_NOTE', `credit note${extraction.po_reference ? ` for ${extraction.po_reference}` : ''}${extraction.invoice_number ? ` (${extraction.invoice_number})` : ''}`));
+    }
     if (extraction.document_type && extraction.document_type !== 'invoice') {
       return finish(STATUS.EXCEPTION, reason('NOT_AN_INVOICE', `document_type=${extraction.document_type}`));
     }
@@ -178,10 +181,18 @@ async function processDocument(ctx, doc, prior) {
       invoiceDate: extraction.invoice_date,
       paymentTermsDays: terms_ ? terms_.days : undefined,
       paymentTermsLabel: terms_ ? terms_.label : undefined,
+      invoiceGross: extraction.totals.gross,
+      adjustToInvoice: config.matching.billAdjustToInvoice,
     });
     if (!document) document = await downloadAsDocument(books, documentId, fileName);
     const { bill, attached } = await createBillWithAttachment({ books, logger, payload, document, poId: po.purchaseorder_id });
     result.links.bill = `${config.report.booksAppBase}#/bills/${bill.bill_id}`;
+    const billTotal = Number(bill && bill.total);
+    if (Number.isFinite(billTotal) && Math.abs(billTotal - extraction.totals.gross) >= 0.01) {
+      // Bill exists with a different figure than the invoice (adjustment not applied / tax recomputed) — flag it, never silently.
+      result.note = `bill total ${fmt(billTotal)} differs from invoice ${fmt(extraction.totals.gross)}`;
+      logger.warn('bill.total_differs', { bill_id: bill.bill_id, bill_total: billTotal, invoice_total: extraction.totals.gross, adjustment: payload.adjustment || 0 });
+    }
 
     if (!attached) {
       return finish(STATUS.BILLED_NO_ATTACH, reason('ATTACH_FAILED', 'attachment not confirmed'), { bill_id: bill.bill_id, bill_number: bill.bill_number });

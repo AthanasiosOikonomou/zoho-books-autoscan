@@ -26,7 +26,9 @@ function fakeBooks({ docs, pos, bills = [] }) {
     async searchPurchaseOrders(q) { calls.push('po.search'); const v = q.purchaseorder_number || q.reference_number; return pos.filter((p) => p.purchaseorder_number === v || p.reference_number === v); },
     async getPurchaseOrder(id) { calls.push('po.get'); return pos.find((p) => p.purchaseorder_id === id); },
     async searchBills(q) { calls.push('bills.search'); return state.bills.filter((b) => (q.bill_number ? b.bill_number === q.bill_number && b.vendor_id === q.vendor_id : b.purchaseorder_id === q.purchaseorder_id)); },
-    async getBillFromPurchaseOrders(poId) { calls.push('bill.editpage'); const po = pos.find((p) => p.purchaseorder_id === poId); return { vendor_id: po.vendor_id, date: '2026-11-03', purchaseorder_ids: [poId], line_items: po.line_items }; },
+    async getBillFromPurchaseOrders(poId) { calls.push('bill.editpage'); const po = pos.find((p) => p.purchaseorder_id === poId); // like Books: the template is priced on the PO's *remaining* (un-billed) value
+      const full = po.line_items.reduce((s, l) => s + l.quantity * l.rate, 0); const billedSoFar = state.bills.filter((b) => b.purchaseorder_id === poId).reduce((s, b) => s + Number(b.total || 0), 0);
+      return { vendor_id: po.vendor_id, date: '2026-11-03', purchaseorder_ids: [poId], total: Math.round((full - billedSoFar) * 100) / 100, line_items: po.line_items }; },
     async createBill(payload) { calls.push('bill.create'); const bill = { bill_id: `b${state.created.length + 1}`, bill_number: payload.bill_number, vendor_id: payload.vendor_id, status: 'open', total: payload.line_items.reduce((s, l) => s + l.quantity * l.rate, 0) }; state.created.push(bill); state.bills.push({ ...bill, purchaseorder_id: payload.purchaseorder_ids[0] }); return bill; },
     async markBillOpen() { calls.push('bill.open'); return { code: 0 }; },
     async attachToBill(id) { calls.push(`attach:${id}`); state.attached.push(id); return { code: 0 }; },
@@ -129,7 +131,7 @@ test('total mismatch and low confidence are exceptions; docs with transactions a
     { document_id: 'd6', file_name: 'f.pdf', transactions: [] },
     { document_id: 'd7', file_name: 'g.pdf', transactions: [{ transaction_id: 't' }] },
   ], pos });
-  const ex = fakeExtractor({ d5: { po_reference: 'PO-00001', gross: 121 }, d6: { po_reference: 'PO-00001', gross: 120, confidence: 0.4 } });
+  const ex = fakeExtractor({ d5: { po_reference: 'PO-00001', gross: 122 }, d6: { po_reference: 'PO-00001', gross: 120, confidence: 0.4 } }); // £2 over: outside the £1 tolerance
   const store = new JsonFileStore(); const m = mailer();
   const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store, mailer: m, logger });
   const by = Object.fromEntries(r.results.map((x) => [x.document_id, x.reason_code]));
@@ -207,4 +209,26 @@ test('bill is NOT created when the PO template total differs from the invoice', 
   const store = new JsonFileStore(); const m = mailer();
   const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store, mailer: m, logger });
   assert.equal(r.results[0].reason_code, 'BILL_TEMPLATE_MISMATCH'); assert.equal(books.state.created.length, 0);
+});
+
+test('credit note → CREDIT_NOTE exception (not NOT_AN_INVOICE), nothing created, file kept', async () => {
+  const books = fakeBooks({ docs: [{ document_id: 'cn1', file_name: 'cn.pdf', transactions: [] }], pos });
+  const ex = fakeExtractor({ cn1: { po_reference: 'PO-00001', gross: -30, override: { document_type: 'credit_note', invoice_number: 'CN-77' } } });
+  const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store: new JsonFileStore(), mailer: mailer(), logger });
+  assert.equal(r.results[0].reason_code, 'CREDIT_NOTE'); assert.match(r.results[0].reason_text, /PO-00001/); assert.match(r.results[0].reason_text, /CN-77/);
+  assert.equal(books.state.created.length, 0); assert.ok(!books.calls.includes('doc.delete'));
+});
+test('bill is posted with the invoice total: 40p over the PO within the £1 tolerance → adjustment 0.40 on the bill', async () => {
+  const books = fakeBooks({ docs: [{ document_id: 'adj1', file_name: 'adj.pdf', transactions: [] }], pos });
+  const ex = fakeExtractor({ adj1: { po_reference: 'PO-00001', gross: 120.4 } });
+  const seen = [];
+  const orig = books.api.createBill; books.api.createBill = async (payload) => { seen.push(payload); const b = await orig(payload); b.total = b.total + (payload.adjustment || 0); return b; };
+  const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store: new JsonFileStore(), mailer: mailer(), logger });
+  assert.equal(r.billed, 1); assert.equal(seen[0].adjustment, 0.4); assert.equal(r.results[0].note, undefined, 'bill total equals the invoice → no note');
+});
+test('bill created but Books ignored the adjustment → BILLED with a visible note', async () => {
+  const books = fakeBooks({ docs: [{ document_id: 'adj2', file_name: 'adj2.pdf', transactions: [] }], pos });
+  const ex = fakeExtractor({ adj2: { po_reference: 'PO-00001', gross: 120.4 } });
+  const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store: new JsonFileStore(), mailer: mailer(), logger });
+  assert.equal(r.billed, 1); assert.match(r.results[0].note, /120\.00 differs from invoice 120\.40/);
 });

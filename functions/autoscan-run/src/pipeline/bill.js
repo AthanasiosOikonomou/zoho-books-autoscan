@@ -14,7 +14,7 @@
  * Phase 1: full PO quantities (as the template provides them).
  * Phase 2 passes `quantities` = { purchaseorder_item_id: invoicedQty } to bill partially.
  */
-function buildBillPayload({ template, invoiceNumber, invoiceDate, paymentTermsDays, paymentTermsLabel, quantities = null, maxBillNumberLen = 50 }) {
+function buildBillPayload({ template, invoiceNumber, invoiceDate, paymentTermsDays, paymentTermsLabel, quantities = null, maxBillNumberLen = 50, invoiceGross = null, adjustToInvoice = false }) {
   const billNumber = String(invoiceNumber || '').trim().slice(0, maxBillNumberLen) || `bill-${Date.now()}`;
 
   const lineItems = [];
@@ -50,7 +50,22 @@ function buildBillPayload({ template, invoiceNumber, invoiceDate, paymentTermsDa
   if (template.currency_id) payload.currency_id = template.currency_id;
   if (template.exchange_rate) payload.exchange_rate = template.exchange_rate;
   if (template.is_inclusive_tax !== undefined) payload.is_inclusive_tax = template.is_inclusive_tax;
+
+  // The bill must show the supplier's invoice total, not the PO's. Books prices the bill from the PO lines
+  // (template.total); any difference inside the tolerance (rounding, pence) is posted as a bill adjustment.
+  const adj = billAdjustment({ template, invoiceGross, adjustToInvoice, quantities });
+  if (adj) { payload.adjustment = adj; payload.adjustment_description = `Adjusted to supplier invoice ${billNumber} total`; }
   return payload;
+}
+
+/** Difference invoice − template total (2 dp), or 0 when disabled / unknown / below a penny. Full-quantity bills only (partial bills are priced by Phase 2). */
+function billAdjustment({ template, invoiceGross, adjustToInvoice, quantities }) {
+  if (!adjustToInvoice || quantities) return 0;
+  const t = Number(template && template.total);
+  const g = Number(invoiceGross);
+  if (!Number.isFinite(t) || !Number.isFinite(g)) return 0;
+  const d = Math.round((g - t) * 100) / 100;
+  return Math.abs(d) < 0.01 ? 0 : d;
 }
 
 /**
@@ -89,4 +104,4 @@ async function createBillWithAttachment({ books, logger, payload, document, poId
   return { bill, attached };
 }
 
-module.exports = { buildBillPayload, paymentTermsFromPo, createBillWithAttachment };
+module.exports = { buildBillPayload, billAdjustment, paymentTermsFromPo, createBillWithAttachment };

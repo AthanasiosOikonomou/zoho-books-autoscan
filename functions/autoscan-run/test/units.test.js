@@ -9,7 +9,7 @@ const { detectMime, isSupported, estimatePageCount } = require('../src/util/mime
 const { parseAmount } = require('../src/util/money');
 const { normaliseExtraction } = require('../src/claude/schema');
 const { createRateLimiter, mapWithConcurrency } = require('../src/util/limiter');
-const { buildBillPayload, paymentTermsFromPo } = require('../src/pipeline/bill');
+const { buildBillPayload, billAdjustment, paymentTermsFromPo } = require('../src/pipeline/bill');
 const { loadConfig, assertRuntimeConfig } = require('../src/config');
 const { createSmtpMailer, createMailer } = require('../src/report/mailers');
 const { createLogger, describeError, errorMessage } = require('../src/logger');
@@ -114,7 +114,7 @@ test('paymentTermsFromPo matches by number of days, not label', () => {
 
 test('config defaults are safe (dry-run on)', () => {
   const c = loadConfig({});
-  assert.equal(c.run.dryRun, true); assert.equal(c.matching.totalTolerance, 0.02); assert.equal(c.books.ratePerMin, 80);
+  assert.equal(c.run.dryRun, true); assert.equal(c.matching.totalTolerance, 1); assert.equal(c.books.ratePerMin, 80);
   assert.equal(loadConfig({ DRY_RUN: 'false' }).run.dryRun, false);
 });
 
@@ -202,4 +202,21 @@ test('retry window: a PROCESSING claim older than the lock window (dead run) is 
   const args = { olderThan: new Date(now - 12 * 3600000), transientOlderThan: now, staleOlderThan: new Date(now - 15 * 60000), maxAttempts: 5, limit: 50 };
   assert.deepEqual((await store.listRetryCandidates(args)).map((r) => r.document_id), ['old']);
   assert.deepEqual((await store.listRetryCandidates({ ...args, staleOlderThan: undefined })).map((r) => r.document_id), [], 'without a stale window PROCESSING rows are never retried');
+});
+
+test('bill adjustment: the bill carries the invoice total — difference to the PO-priced template goes into `adjustment`', () => {
+  const template = { vendor_id: 'v', date: '2026-11-03', purchaseorder_ids: ['p'], total: 248.4, line_items: [{ purchaseorder_item_id: 'a', item_id: 'i', name: 'n', account_id: 'acc', quantity: 4, rate: 51.75 }] };
+  const p = buildBillPayload({ template, invoiceNumber: 'INV-1', invoiceDate: '2026-11-03', invoiceGross: 248.95, adjustToInvoice: true });
+  assert.equal(p.adjustment, 0.55); assert.match(p.adjustment_description, /INV-1/);
+  assert.equal(buildBillPayload({ template, invoiceNumber: 'INV-1', invoiceGross: 248.4, adjustToInvoice: true }).adjustment, undefined, 'exact match → no adjustment');
+  assert.equal(buildBillPayload({ template, invoiceNumber: 'INV-1', invoiceGross: 248.404, adjustToInvoice: true }).adjustment, undefined, 'below a penny → none');
+  assert.equal(buildBillPayload({ template, invoiceNumber: 'INV-1', invoiceGross: 247.9, adjustToInvoice: true }).adjustment, -0.5, 'negative adjustment allowed');
+  assert.equal(buildBillPayload({ template, invoiceNumber: 'INV-1', invoiceGross: 248.95, adjustToInvoice: false }).adjustment, undefined, 'disabled');
+  assert.equal(billAdjustment({ template, invoiceGross: 248.95, adjustToInvoice: true, quantities: { a: 2 } }), 0, 'partial bills: not adjusted here');
+  assert.equal(billAdjustment({ template: {}, invoiceGross: 10, adjustToInvoice: true }), 0, 'no template total → none');
+});
+test('config defaults: £1 tolerance, 6 h retry window, 28 attempts, adjustment on', () => {
+  const c = loadConfig({});
+  assert.equal(c.matching.totalTolerance, 1); assert.equal(c.matching.billAdjustToInvoice, true);
+  assert.equal(c.run.retryAfterHours, 6); assert.equal(c.run.maxAttempts, 28);
 });
