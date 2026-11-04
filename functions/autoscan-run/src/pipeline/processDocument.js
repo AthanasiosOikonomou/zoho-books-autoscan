@@ -5,6 +5,7 @@ const { errorMessage } = require('../logger');
 const { STATUS } = require('../state/store');
 const { reason } = require('./reasons');
 const { resolvePurchaseOrder } = require('./resolvePo');
+const { processCreditNote } = require('./creditNote');
 const { matchTotals, sumBilled } = require('./match');
 const { buildBillPayload, paymentTermsFromPo, createBillWithAttachment } = require('./bill');
 const { detectMime, isSupported, estimatePageCount } = require('../util/mime');
@@ -99,7 +100,11 @@ async function processDocument(ctx, doc, prior) {
     Object.assign(rec, { invoice_number: extraction.invoice_number, invoice_date: extraction.invoice_date, invoice_gross: extraction.totals.gross, vendor_name: extraction.supplier_name });
 
     if (extraction.document_type === 'credit_note') {
-      return finish(STATUS.EXCEPTION, reason('CREDIT_NOTE', `credit note${extraction.po_reference ? ` for ${extraction.po_reference}` : ''}${extraction.invoice_number ? ` (${extraction.invoice_number})` : ''}`));
+      result.kind = 'credit_note';
+      return processCreditNote({
+        ctx, config, books, logger, documentId, extraction, rec, result, finish,
+        getDocument: async () => { if (!document) document = await downloadAsDocument(books, documentId, fileName); return document; },
+      });
     }
     if (extraction.document_type && extraction.document_type !== 'invoice') {
       return finish(STATUS.EXCEPTION, reason('NOT_AN_INVOICE', `document_type=${extraction.document_type}`));

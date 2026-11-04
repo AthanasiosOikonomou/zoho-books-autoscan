@@ -182,6 +182,32 @@ function createBooksClient({ config, tokenProvider, logger, fetchImpl = fetch, s
     return request(`/bills/${billId}/attachment`, { method: 'POST', form });
   }
 
+  // ---------------------------------------------------------------- Vendor credits (supplier credit notes)
+  async function searchVendorCredits(query) {
+    // query: { vendor_id, vendor_credit_number }
+    const json = await request('/vendorcredits', { query });
+    return json.vendor_credits || json.vendorcredits || [];
+  }
+  async function createVendorCredit(payload) {
+    const json = await request('/vendorcredits', { method: 'POST', json: payload });
+    return json.vendor_credit;
+  }
+  async function markVendorCreditOpen(id) {
+    return request(`/vendorcredits/${id}/status/open`, { method: 'POST' });
+  }
+  async function deleteVendorCredit(id) {
+    return request(`/vendorcredits/${id}`, { method: 'DELETE' });
+  }
+  /** Apply (part of) a vendor credit to a bill. */
+  async function applyVendorCreditToBill(creditId, billId, amount) {
+    return request(`/vendorcredits/${creditId}/bills`, { method: 'POST', json: { bills: [{ bill_id: billId, amount_applied: amount }] } });
+  }
+  async function attachToVendorCredit(id, buffer, fileName, mime) {
+    const form = new FormData();
+    form.append('attachment', new Blob([buffer], { type: mime }), fileName);
+    return request(`/vendorcredits/${id}/attachment`, { method: 'POST', form });
+  }
+
   // ---------------------------------------------------------------- Settings / contacts / items
   async function getPaymentTerms() {
     const json = await request('/settings/paymentterms');
@@ -213,6 +239,12 @@ function createBooksClient({ config, tokenProvider, logger, fetchImpl = fetch, s
     markBillOpen,
     getBill,
     attachToBill,
+    searchVendorCredits,
+    createVendorCredit,
+    markVendorCreditOpen,
+    deleteVendorCredit,
+    applyVendorCreditToBill,
+    attachToVendorCredit,
     getPaymentTerms,
     getContact,
     listOrganizations,

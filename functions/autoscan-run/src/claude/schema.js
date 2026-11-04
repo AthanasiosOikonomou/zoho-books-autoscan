@@ -20,6 +20,7 @@ const RECORD_INVOICE_TOOL = {
       invoice_number: nullableString,
       invoice_date: { ...nullableString, description: 'ISO 8601 date YYYY-MM-DD' },
       po_reference: { ...nullableString, description: 'Customer PO reference verbatim as printed' },
+      related_invoice_number: { ...nullableString, description: 'Credit notes only: the supplier invoice number this credit note refers to, verbatim; null if not printed' },
       supplier_name: nullableString,
       currency: { ...nullableString, description: 'ISO 4217 if printed, e.g. GBP' },
       totals: {
@@ -62,6 +63,7 @@ function normaliseExtraction(raw) {
     invoice_number: str(r.invoice_number),
     invoice_date: /^\d{4}-\d{2}-\d{2}$/.test(String(r.invoice_date || '')) ? r.invoice_date : null,
     po_reference: str(r.po_reference),
+    related_invoice_number: str(r.related_invoice_number),
     supplier_name: str(r.supplier_name),
     currency: str(r.currency),
     totals: { net: num(totals.net), vat: num(totals.vat), carriage: num(totals.carriage), gross: num(totals.gross) },

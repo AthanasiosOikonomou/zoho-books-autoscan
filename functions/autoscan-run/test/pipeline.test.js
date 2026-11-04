@@ -16,7 +16,7 @@ const PDF = Buffer.from('%PDF-1.4\n1 0 obj << /Type /Page >>');
 
 function fakeBooks({ docs, pos, bills = [] }) {
   const calls = [];
-  const state = { docs: [...docs], bills: [...bills], created: [], attached: [], deleted: [] };
+  const state = { docs: [...docs], bills: [...bills], created: [], attached: [], deleted: [], credits: [], applied: [], creditAttached: [] };
   const api = {
     stats: { calls: 0 },
     async getPaymentTerms() { calls.push('terms'); return [{ payment_terms: 30, payment_terms_label: 'Net 30' }]; },
@@ -32,6 +32,14 @@ function fakeBooks({ docs, pos, bills = [] }) {
     async createBill(payload) { calls.push('bill.create'); const bill = { bill_id: `b${state.created.length + 1}`, bill_number: payload.bill_number, vendor_id: payload.vendor_id, status: 'open', total: payload.line_items.reduce((s, l) => s + l.quantity * l.rate, 0) }; state.created.push(bill); state.bills.push({ ...bill, purchaseorder_id: payload.purchaseorder_ids[0] }); return bill; },
     async markBillOpen() { calls.push('bill.open'); return { code: 0 }; },
     async attachToBill(id) { calls.push(`attach:${id}`); state.attached.push(id); return { code: 0 }; },
+    async getBill(id) { calls.push('bill.get'); const b = state.bills.find((x) => x.bill_id === id); return b ? { ...b, balance: b.balance !== undefined ? b.balance : b.total } : null; },
+    // vendor credits
+    async searchVendorCredits(q) { calls.push('credits.search'); return state.credits.filter((c) => c.vendor_id === q.vendor_id && c.vendor_credit_number === q.vendor_credit_number); },
+    async createVendorCredit(payload) { calls.push('credit.create'); const c = { vendor_credit_id: `vc${state.credits.length + 1}`, vendor_credit_number: payload.vendor_credit_number, vendor_id: payload.vendor_id, status: 'draft', total: Math.round(payload.line_items.reduce((s, l) => s + l.quantity * l.rate * (l.tax_id ? 1.2 : 1), 0) * 100) / 100, payload }; state.credits.push(c); return c; },
+    async markVendorCreditOpen(id) { calls.push(`credit.open:${id}`); return { code: 0 }; },
+    async deleteVendorCredit(id) { calls.push(`credit.delete:${id}`); state.credits = state.credits.filter((c) => c.vendor_credit_id !== id); return { code: 0 }; },
+    async applyVendorCreditToBill(creditId, billId, amount) { calls.push('credit.apply'); state.applied.push({ creditId, billId, amount }); return { code: 0 }; },
+    async attachToVendorCredit(id) { calls.push(`credit.attach:${id}`); state.creditAttached.push(id); return { code: 0 }; },
   };
   return { api, calls, state };
 }
@@ -57,7 +65,7 @@ function mailer() { const sent = []; return { sent, async send(r) { sent.push(r)
 const logger = createLogger({ level: 'error' });
 
 const pos = [
-  { purchaseorder_id: 'po1', purchaseorder_number: 'PO-00001', vendor_id: 'v1', vendor_name: 'Vendor', total: 120, payment_terms: 30, line_items: [{ purchaseorder_item_id: 'x', item_id: 'i', name: 'A', account_id: 'a', quantity: 4, rate: 30 }] },
+  { purchaseorder_id: 'po1', purchaseorder_number: 'PO-00001', vendor_id: 'v1', vendor_name: 'Vendor', total: 120, payment_terms: 30, line_items: [{ purchaseorder_item_id: 'x', item_id: 'i', name: 'A', account_id: 'a', quantity: 4, rate: 30, tax_id: 't20' }] }, // tax_id: the fake prices credits at ×1.2 like VAT
   { purchaseorder_id: 'po2', purchaseorder_number: 'PO-00002', vendor_id: 'v1', vendor_name: 'Vendor', total: 100, payment_terms: 30, line_items: [{ purchaseorder_item_id: 'y', item_id: 'i', name: 'B', account_id: 'a', quantity: 10, rate: 10 }] },
 ];
 
@@ -211,13 +219,47 @@ test('bill is NOT created when the PO template total differs from the invoice', 
   assert.equal(r.results[0].reason_code, 'BILL_TEMPLATE_MISMATCH'); assert.equal(books.state.created.length, 0);
 });
 
-test('credit note → CREDIT_NOTE exception (not NOT_AN_INVOICE), nothing created, file kept', async () => {
-  const books = fakeBooks({ docs: [{ document_id: 'cn1', file_name: 'cn.pdf', transactions: [] }], pos });
-  const ex = fakeExtractor({ cn1: { po_reference: 'PO-00001', gross: -30, override: { document_type: 'credit_note', invoice_number: 'CN-77' } } });
-  const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store: new JsonFileStore(), mailer: mailer(), logger });
-  assert.equal(r.results[0].reason_code, 'CREDIT_NOTE'); assert.match(r.results[0].reason_text, /PO-00001/); assert.match(r.results[0].reason_text, /CN-77/);
-  assert.equal(books.state.created.length, 0); assert.ok(!books.calls.includes('doc.delete'));
+test('credit note against a billed invoice → vendor credit created, opened, applied to that bill, attached, inbox file deleted', async () => {
+  const books = fakeBooks({ docs: [{ document_id: 'cn1', file_name: 'cn.pdf', transactions: [] }], pos, bills: [{ bill_id: 'b-inv', bill_number: 'INV-900', vendor_id: 'v1', total: 120, purchaseorder_id: 'po1' }] });
+  const ex = fakeExtractor({ cn1: { po_reference: 'PO-00001', gross: 36, override: { document_type: 'credit_note', invoice_number: 'CN-77', related_invoice_number: 'INV-900', totals: { net: 30, vat: 6, carriage: null, gross: 36 }, line_items: [{ mpn: 'A', description: 'Returned item', quantity: 1, unit_price: 30, line_total: 30 }] } } });
+  const store = new JsonFileStore();
+  const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store, mailer: mailer(), logger });
+  const x = r.results[0];
+  assert.equal(x.status, STATUS.CREDITED); assert.equal(r.credited, 1); assert.equal(r.exceptions, 0);
+  assert.equal(books.state.credits.length, 1); assert.equal(books.state.credits[0].payload.vendor_credit_number, 'CN-77'); assert.equal(books.state.credits[0].payload.reference_number, 'PO-00001');
+  assert.equal(books.state.credits[0].payload.line_items[0].item_id, 'i', 'line mapped to the PO line (name contains the MPN)');
+  assert.deepEqual(books.state.applied, [{ creditId: 'vc1', billId: 'b-inv', amount: 36 }]);
+  assert.deepEqual(books.state.creditAttached, ['vc1']); assert.deepEqual(books.state.deleted, ['cn1']);
+  assert.equal(x.credit.bill, 'INV-900'); assert.equal(x.note, null);
+  const rec = (await store.getByDocumentIds(['cn1'])).get('cn1'); assert.equal(rec.credit_id, 'vc1'); assert.equal(rec.bill_id, 'b-inv');
+  assert.equal(books.state.created.length, 0, 'no bill created');
 });
+test('credit note with PO only (no invoice reference, PO has several bills) → vendor credit on the PO, reported as not linked', async () => {
+  const books = fakeBooks({ docs: [{ document_id: 'cn2', file_name: 'cn2.pdf', transactions: [] }], pos, bills: [{ bill_id: 'b1', bill_number: 'INV-1', vendor_id: 'v1', total: 60, purchaseorder_id: 'po1' }, { bill_id: 'b2', bill_number: 'INV-2', vendor_id: 'v1', total: 60, purchaseorder_id: 'po1' }] });
+  const ex = fakeExtractor({ cn2: { po_reference: 'PO-00001', gross: 12, override: { document_type: 'credit_note', invoice_number: 'CN-78', related_invoice_number: null, totals: { net: 10, vat: 2, carriage: null, gross: 12 }, line_items: [{ mpn: 'ZZZ', description: 'Shortage', quantity: 1, unit_price: 10, line_total: 10 }] } } });
+  const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store: new JsonFileStore(), mailer: mailer(), logger });
+  const x = r.results[0];
+  assert.equal(x.status, STATUS.CREDITED); assert.equal(x.credit.bill, null); assert.match(x.note, /not linked to any bill/);
+  assert.equal(books.state.applied.length, 0); assert.equal(books.state.credits[0].payload.line_items[0].account_id, 'a', 'unmatched MPN → first PO line account');
+});
+test('credit note: same number twice → DUPLICATE; dry-run → WOULD_CREDIT and nothing written', async () => {
+  const books = fakeBooks({ docs: [{ document_id: 'cn3', file_name: 'cn3.pdf', transactions: [] }], pos });
+  books.state.credits.push({ vendor_credit_id: 'old', vendor_credit_number: 'CN-79', vendor_id: 'v1', total: 12 });
+  const ex = fakeExtractor({ cn3: { po_reference: 'PO-00001', gross: 12, override: { document_type: 'credit_note', invoice_number: 'CN-79', totals: { net: 10, vat: 2, carriage: null, gross: 12 }, line_items: [] } } });
+  const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store: new JsonFileStore(), mailer: mailer(), logger });
+  assert.equal(r.results[0].status, STATUS.DUPLICATE); assert.equal(books.state.credits.length, 1);
+  const books2 = fakeBooks({ docs: [{ document_id: 'cn4', file_name: 'cn4.pdf', transactions: [] }], pos });
+  const ex2 = fakeExtractor({ cn4: { po_reference: 'PO-00001', gross: 12, override: { document_type: 'credit_note', invoice_number: 'CN-80', totals: { net: 10, vat: 2, carriage: null, gross: 12 }, line_items: [] } } });
+  const r2 = await runAutoscan({ config: cfg(), books: books2.api, extractor: ex2, store: new JsonFileStore(), mailer: mailer(), logger });
+  assert.equal(r2.results[0].status, STATUS.WOULD_CREDIT); assert.equal(r2.would_credit, 1); assert.equal(books2.state.credits.length, 0);
+});
+test('credit note whose Books total differs from the printed total → credit deleted again, CREDIT_TOTAL_MISMATCH', async () => {
+  const books = fakeBooks({ docs: [{ document_id: 'cn5', file_name: 'cn5.pdf', transactions: [] }], pos });
+  const ex = fakeExtractor({ cn5: { po_reference: 'PO-00001', gross: 50, override: { document_type: 'credit_note', invoice_number: 'CN-81', totals: { net: 30, vat: 20, carriage: null, gross: 50 }, line_items: [{ mpn: 'A', description: 'x', quantity: 1, unit_price: 30, line_total: 30 }] } } });
+  const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store: new JsonFileStore(), mailer: mailer(), logger });
+  assert.equal(r.results[0].reason_code, 'CREDIT_TOTAL_MISMATCH'); assert.equal(books.state.credits.length, 0, 'draft credit removed'); assert.ok(books.calls.includes('credit.delete:vc1'));
+});
+
 test('bill is posted with the invoice total: 40p over the PO within the £1 tolerance → adjustment 0.40 on the bill', async () => {
   const books = fakeBooks({ docs: [{ document_id: 'adj1', file_name: 'adj.pdf', transactions: [] }], pos });
   const ex = fakeExtractor({ adj1: { po_reference: 'PO-00001', gross: 120.4 } });

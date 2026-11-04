@@ -25,11 +25,13 @@ const STATUS = Object.freeze({
   EXCEPTION: 'EXCEPTION',
   DUPLICATE: 'DUPLICATE',
   WOULD_BILL: 'WOULD_BILL', // dry-run only
+  CREDITED: 'CREDITED', // supplier credit note → vendor credit created
+  WOULD_CREDIT: 'WOULD_CREDIT', // dry-run only
 });
 
-const TERMINAL = new Set([STATUS.BILLED, STATUS.DUPLICATE]);
-// WOULD_BILL is retry-eligible so the first LIVE run after a dry-run period bills them.
-const RETRYABLE = new Set([STATUS.EXCEPTION, STATUS.BILLED_NO_ATTACH, STATUS.WOULD_BILL]);
+const TERMINAL = new Set([STATUS.BILLED, STATUS.DUPLICATE, STATUS.CREDITED]);
+// WOULD_BILL / WOULD_CREDIT are retry-eligible so the first LIVE run after a dry-run period posts them.
+const RETRYABLE = new Set([STATUS.EXCEPTION, STATUS.BILLED_NO_ATTACH, STATUS.WOULD_BILL, STATUS.WOULD_CREDIT]);
 /** Reasons caused by us/the services, not by the document: retried on the next run instead of after RETRY_AFTER_HOURS. */
 const TRANSIENT_REASONS = new Set(['AI_ERROR', 'BOOKS_ERROR', 'ATTACH_FAILED']);
 
@@ -37,6 +39,7 @@ const DOCUMENT_FIELDS = [
   'document_id', 'file_hash', 'file_name', 'mime', 'pages', 'status', 'reason_code', 'reason_text',
   'attempts', 'first_seen', 'last_attempt', 'vendor_id', 'vendor_name', 'po_id', 'po_number', 'bill_id', 'bill_number',
   'invoice_number', 'invoice_date', 'invoice_gross', 'extraction_json', 'prompt_version', 'model', 'tokens_in', 'tokens_out', 'run_id', 'claimed_run_id',
+  'credit_id', 'credit_number',
 ];
 
 // ------------------------------------------------------------------ local / test
@@ -115,10 +118,15 @@ class JsonFileStore {
  *    from the insert response.
  */
 const DOC_READ_COLUMNS = [
-  'ROWID', 'document_id', 'file_hash', 'file_name', 'mime', 'pages', 'status', 'reason_code', 'reason_text',
+  'ROWID', 'document_id', 'file_hash', 'file_name', 'status', 'reason_code', 'reason_text',
   'attempts', 'first_seen', 'last_attempt', 'vendor_id', 'po_id', 'bill_id', 'bill_number', 'invoice_number',
-  'extraction_json', 'prompt_version', 'model',
-]; // 20 — the ZCQL maximum
+  'extraction_json', 'prompt_version', 'model', 'credit_id', 'credit_number',
+]; // 20 — the ZCQL maximum (mime/pages are not needed on retry)
+/** Columns the daily report reads (a second 20-column set). */
+const DOC_REPORT_COLUMNS = [
+  'ROWID', 'document_id', 'file_name', 'status', 'reason_code', 'reason_text', 'attempts', 'first_seen', 'last_attempt',
+  'vendor_name', 'po_id', 'po_number', 'bill_id', 'bill_number', 'invoice_number', 'invoice_date', 'invoice_gross', 'credit_id', 'credit_number', 'run_id',
+];
 const DOC_DATETIME_FIELDS = ['first_seen', 'last_attempt'];
 const RUN_DATETIME_FIELDS = ['started', 'finished'];
 const RUN_READ_COLUMNS = ['ROWID', 'run_id', 'started', 'finished', 'status', 'notes'];
@@ -237,7 +245,7 @@ class CatalystStore {
     // Rows older than the normal window match the first clause; transient-reason rows also match the second (shorter) one;
     // PROCESSING rows whose claim is older than the lock window belong to a run that died — third clause.
     const stale = staleOlderThan ? ` OR (status = 'PROCESSING' AND last_attempt <= '${toZcqlDateTime(staleOlderThan)}')` : '';
-    const sql = `SELECT ${DOC_READ_COLUMNS.join(', ')} FROM document_state WHERE attempts < ${Number(maxAttempts)} AND (((status = 'EXCEPTION' OR status = 'BILLED_NO_ATTACH' OR status = 'WOULD_BILL') AND last_attempt <= '${cutoff}') OR ((${transient}) AND last_attempt <= '${tCutoff}')${stale}) ORDER BY last_attempt ASC LIMIT ${Number(limit)}`;
+    const sql = `SELECT ${DOC_READ_COLUMNS.join(', ')} FROM document_state WHERE attempts < ${Number(maxAttempts)} AND (((status = 'EXCEPTION' OR status = 'BILLED_NO_ATTACH' OR status = 'WOULD_BILL' OR status = 'WOULD_CREDIT') AND last_attempt <= '${cutoff}') OR ((${transient}) AND last_attempt <= '${tCutoff}')${stale}) ORDER BY last_attempt ASC LIMIT ${Number(limit)}`;
     const rows = await this._query(sql, 'document_state');
     for (const r of rows) this.rowIds.set(String(r.document_id), String(r.ROWID));
     return rows.map((r) => this._fromRow(r, DOC_DATETIME_FIELDS));
@@ -278,4 +286,4 @@ function fromZcqlDateTime(s) {
   return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])).toISOString();
 }
 
-module.exports = { STATUS, TERMINAL, RETRYABLE, TRANSIENT_REASONS, DOCUMENT_FIELDS, RUN_FIELDS, DOC_READ_COLUMNS, JsonFileStore, CatalystStore, toZcqlDateTime, fromZcqlDateTime };
+module.exports = { STATUS, TERMINAL, RETRYABLE, TRANSIENT_REASONS, DOCUMENT_FIELDS, RUN_FIELDS, DOC_READ_COLUMNS, DOC_REPORT_COLUMNS, JsonFileStore, CatalystStore, toZcqlDateTime, fromZcqlDateTime };

@@ -93,6 +93,10 @@ async function runAutoscan(deps) {
     docs_seen: summary.docs_seen,
     new_count: summary.new_count,
     billed: summary.billed,
+    would_bill: summary.would_bill,
+    credited: summary.credited,
+    would_credit: summary.would_credit,
+    duplicates: summary.duplicates,
     exceptions: summary.exceptions,
     retried: summary.retried,
     errors: summary.errors,
@@ -129,11 +133,13 @@ function collect(results, pass, items, mode) {
 }
 
 function summarise(results, stats) {
-  const s = { docs_seen: results.length, new_count: 0, retried: 0, billed: 0, would_bill: 0, exceptions: 0, duplicates: 0, errors: 0, claude_calls: 0, tokens_in: 0, tokens_out: 0, est_cost_usd: 0 };
+  const s = { docs_seen: results.length, new_count: 0, retried: 0, billed: 0, would_bill: 0, credited: 0, would_credit: 0, exceptions: 0, duplicates: 0, errors: 0, claude_calls: 0, tokens_in: 0, tokens_out: 0, est_cost_usd: 0 };
   for (const r of results) {
     if (r.mode === 'new') s.new_count++; else s.retried++;
     if (r.status === STATUS.BILLED) s.billed++;
     else if (r.status === STATUS.WOULD_BILL) s.would_bill++;
+    else if (r.status === STATUS.CREDITED) s.credited++;
+    else if (r.status === STATUS.WOULD_CREDIT) s.would_credit++;
     else if (r.status === STATUS.DUPLICATE) s.duplicates++;
     else s.exceptions++;
     if (r.reason_code === 'AI_ERROR' || r.reason_code === 'BOOKS_ERROR') s.errors++;

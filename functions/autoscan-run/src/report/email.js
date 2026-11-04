@@ -10,8 +10,9 @@ const { REASONS } = require('../pipeline/reasons');
 function buildReport({ run, results, config, stoppedEarly }) {
   const billed = results.filter((r) => r.status === STATUS.BILLED);
   const wouldBill = results.filter((r) => r.status === STATUS.WOULD_BILL);
+  const credits = results.filter((r) => r.status === STATUS.CREDITED || r.status === STATUS.WOULD_CREDIT);
   const dupes = results.filter((r) => r.status === STATUS.DUPLICATE);
-  const exceptions = results.filter((r) => ![STATUS.BILLED, STATUS.WOULD_BILL, STATUS.DUPLICATE].includes(r.status));
+  const exceptions = results.filter((r) => ![STATUS.BILLED, STATUS.WOULD_BILL, STATUS.CREDITED, STATUS.WOULD_CREDIT, STATUS.DUPLICATE].includes(r.status));
 
   const groups = new Map();
   for (const r of exceptions) {
@@ -21,7 +22,7 @@ function buildReport({ run, results, config, stoppedEarly }) {
   }
 
   const dry = config.run.dryRun ? ' [DRY-RUN]' : '';
-  const subject = `${config.report.subjectPrefix}${dry}: ${billed.length + wouldBill.length} billed, ${exceptions.length} to review, ${dupes.length} duplicates — ${fmtDate(run.started)}`;
+  const subject = `${config.report.subjectPrefix}${dry}: ${billed.length + wouldBill.length} billed, ${credits.length ? `${credits.length} credited, ` : ''}${exceptions.length} to review, ${dupes.length} duplicates — ${fmtDate(run.started)}`;
 
   const h = [];
   h.push(`<div style="font-family:Arial,Helvetica,sans-serif;color:#222;max-width:900px">`);
@@ -61,6 +62,16 @@ function buildReport({ run, results, config, stoppedEarly }) {
     h.push(`</table>`);
   }
 
+  if (credits.length) {
+    h.push(`<h3 style="margin:20px 0 8px;color:#2a7">${config.run.dryRun ? 'Would be credited' : 'Vendor credits created'} (${credits.length})</h3>`);
+    h.push(`<table style="border-collapse:collapse;width:100%;font-size:13px">`);
+    h.push(`<tr style="background:#f4f4f4"><th align="left" style="padding:4px">Document</th><th align="left" style="padding:4px">Supplier</th><th align="left" style="padding:4px">Credit note #</th><th align="left" style="padding:4px">PO</th><th align="left" style="padding:4px">Bill</th><th align="right" style="padding:4px">Total</th><th align="left" style="padding:4px">Links</th></tr>`);
+    for (const r of credits) {
+      h.push(`<tr><td style="padding:4px;border-top:1px solid #eee">${esc(r.file_name)}</td><td style="padding:4px;border-top:1px solid #eee">${esc(r.po && r.po.vendor)}</td><td style="padding:4px;border-top:1px solid #eee">${esc(r.credit && r.credit.number)}</td><td style="padding:4px;border-top:1px solid #eee">${esc(r.po && r.po.number)}</td><td style="padding:4px;border-top:1px solid #eee">${r.credit && r.credit.bill ? esc(r.credit.bill) : '<span style="color:#b23">not linked to any bill</span>'}</td><td align="right" style="padding:4px;border-top:1px solid #eee">${money(r.credit && r.credit.gross)}${r.note ? `<div style="color:#b23;font-size:12px">${esc(r.note)}</div>` : ''}</td><td style="padding:4px;border-top:1px solid #eee">${links(r)}</td></tr>`);
+    }
+    h.push(`</table>`);
+  }
+
   if (dupes.length) {
     h.push(`<h3 style="margin:20px 0 8px;color:#888">Duplicates — already billed (${dupes.length})</h3>`);
     h.push(`<table style="border-collapse:collapse;width:100%;font-size:13px">`);
@@ -73,7 +84,8 @@ function buildReport({ run, results, config, stoppedEarly }) {
 
   const text = [
     subject, '',
-    `New: ${run.new_count}  Retried: ${run.retried}  Billed: ${billed.length + wouldBill.length}  Review: ${exceptions.length}  Duplicates: ${dupes.length}`,
+    `New: ${run.new_count}  Retried: ${run.retried}  Billed: ${billed.length + wouldBill.length}  Credited: ${credits.length}  Review: ${exceptions.length}  Duplicates: ${dupes.length}`,
+    ...credits.map((r) => `  + credit ${r.credit ? r.credit.number : ''} | ${r.file_name} | ${r.credit && r.credit.bill ? `bill ${r.credit.bill}` : 'NOT linked to any bill'}${r.note ? ` | ${r.note}` : ''}`),
     ...[...groups].flatMap(([code, rows]) => [``, `${code} (${rows.length}): ${(REASONS[code] || {}).action || ''}`, ...rows.map((r) => `  - ${r.file_name} | ${r.extracted ? r.extracted.invoice_number : ''} | ${r.reason_text || ''}`)]),
   ].join('\n');
 
@@ -89,6 +101,7 @@ function links(r) {
   const out = [];
   if (r.links && r.links.po) out.push(`<a href="${esc(r.links.po)}">PO</a>`);
   if (r.links && r.links.bill) out.push(`<a href="${esc(r.links.bill)}">Bill</a>`);
+  if (r.links && r.links.credit) out.push(`<a href="${esc(r.links.credit)}">Credit</a>`);
   return out.join(' · ') || '';
 }
 
