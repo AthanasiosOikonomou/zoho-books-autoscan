@@ -22,7 +22,7 @@ Exceptions are **reconciled automatically**: a document whose PO was missing or 
 | `functions/autoscan-run/src/report/` | Run report (HTML + text) and mailers |
 | `functions/autoscan-run/test/` | `node --test` unit + fake-backed pipeline tests |
 | `scripts/` | `books-token.js`, `books-probe.js`, `seed-sandbox.js`, `make-test-invoices.js`, `local-run.js` |
-| `docs/` | Architecture, decisions |
+| `docs/` | Architecture, decisions, client requirements, Catalyst setup |
 
 ## Setup (sandbox)
 
