@@ -11,7 +11,7 @@
  *   getByDocumentIds(ids)            → Map<document_id, record>
  *   findByHash(file_hash)            → record | null
  *   upsert(record)                   → record     (keyed by document_id)
- *   listRetryCandidates({olderThan, maxAttempts, limit}) → record[]
+ *   listRetryCandidates({olderThan, transientOlderThan?, maxAttempts, limit}) → record[]
  *   getActiveRun({staleMinutes})     → run | null
  *   beginRun(run)                    → run
  *   endRun(run)                      → run
@@ -30,6 +30,8 @@ const STATUS = Object.freeze({
 const TERMINAL = new Set([STATUS.BILLED, STATUS.DUPLICATE]);
 // WOULD_BILL is retry-eligible so the first LIVE run after a dry-run period bills them.
 const RETRYABLE = new Set([STATUS.EXCEPTION, STATUS.BILLED_NO_ATTACH, STATUS.WOULD_BILL]);
+/** Reasons caused by us/the services, not by the document: retried on the next run instead of after RETRY_AFTER_HOURS. */
+const TRANSIENT_REASONS = new Set(['AI_ERROR', 'BOOKS_ERROR', 'ATTACH_FAILED']);
 
 const DOCUMENT_FIELDS = [
   'document_id', 'file_hash', 'file_name', 'mime', 'pages', 'status', 'reason_code', 'reason_text',
@@ -66,12 +68,13 @@ class JsonFileStore {
     this._save();
     return merged;
   }
-  async listRetryCandidates({ olderThan, maxAttempts, limit }) {
+  async listRetryCandidates({ olderThan, transientOlderThan, maxAttempts, limit }) {
     const cutoff = new Date(olderThan).toISOString();
+    const tCutoff = new Date(transientOlderThan || olderThan).toISOString();
     return Object.values(this.data.documents)
       .filter((d) => RETRYABLE.has(d.status))
       .filter((d) => (d.attempts || 0) < maxAttempts)
-      .filter((d) => !d.last_attempt || d.last_attempt <= cutoff)
+      .filter((d) => !d.last_attempt || d.last_attempt <= (TRANSIENT_REASONS.has(d.reason_code) ? tCutoff : cutoff))
       .sort((a, b) => String(a.last_attempt).localeCompare(String(b.last_attempt)))
       .slice(0, limit);
   }
@@ -185,9 +188,12 @@ class CatalystStore {
     return { ...record, ROWID: rowId };
   }
 
-  async listRetryCandidates({ olderThan, maxAttempts, limit }) {
+  async listRetryCandidates({ olderThan, transientOlderThan, maxAttempts, limit }) {
     const cutoff = toZcqlDateTime(olderThan);
-    const sql = `SELECT ${DOC_READ_COLUMNS.join(', ')} FROM document_state WHERE (status = 'EXCEPTION' OR status = 'BILLED_NO_ATTACH' OR status = 'WOULD_BILL') AND attempts < ${Number(maxAttempts)} AND last_attempt <= '${cutoff}' ORDER BY last_attempt ASC LIMIT ${Number(limit)}`;
+    const tCutoff = toZcqlDateTime(transientOlderThan || olderThan);
+    const transient = [...TRANSIENT_REASONS].map((c) => `reason_code = '${c}'`).join(' OR ');
+    // Rows older than the normal window match the first clause; transient-reason rows also match the second (shorter) one.
+    const sql = `SELECT ${DOC_READ_COLUMNS.join(', ')} FROM document_state WHERE attempts < ${Number(maxAttempts)} AND (((status = 'EXCEPTION' OR status = 'BILLED_NO_ATTACH' OR status = 'WOULD_BILL') AND last_attempt <= '${cutoff}') OR ((${transient}) AND last_attempt <= '${tCutoff}')) ORDER BY last_attempt ASC LIMIT ${Number(limit)}`;
     const rows = await this._query(sql, 'document_state');
     for (const r of rows) this.rowIds.set(r.document_id, r.ROWID);
     return rows.map((r) => this._fromRow(r, DOC_DATETIME_FIELDS));
@@ -225,4 +231,4 @@ function fromZcqlDateTime(s) {
   return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])).toISOString();
 }
 
-module.exports = { STATUS, TERMINAL, RETRYABLE, DOCUMENT_FIELDS, RUN_FIELDS, DOC_READ_COLUMNS, JsonFileStore, CatalystStore, toZcqlDateTime, fromZcqlDateTime };
+module.exports = { STATUS, TERMINAL, RETRYABLE, TRANSIENT_REASONS, DOCUMENT_FIELDS, RUN_FIELDS, DOC_READ_COLUMNS, JsonFileStore, CatalystStore, toZcqlDateTime, fromZcqlDateTime };

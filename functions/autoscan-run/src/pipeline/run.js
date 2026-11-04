@@ -1,5 +1,7 @@
 'use strict';
 
+const { errorMessage } = require('../logger');
+
 const { STATUS } = require('../state/store');
 const { processDocument } = require('./processDocument');
 const { mapWithConcurrency } = require('../util/limiter');
@@ -50,6 +52,7 @@ async function runAutoscan(deps) {
 
     const retryRecords = (await store.listRetryCandidates({
       olderThan: new Date(startedAt.getTime() - config.run.retryAfterHours * 3600000),
+      transientOlderThan: new Date(startedAt.getTime() - (config.run.retryTransientAfterMinutes || 0) * 60000),
       maxAttempts: config.run.maxAttempts,
       limit: config.run.maxRetryPerRun,
     })).filter((r) => byId.has(String(r.document_id))); // must still be in the inbox
@@ -120,7 +123,7 @@ function collect(results, pass, items, mode) {
   pass.results.forEach((r, i) => {
     if (!r) return;
     if (r.ok) results.push(r.value);
-    else results.push({ document_id: String(items[i].document_id), file_name: items[i].file_name, mode, status: STATUS.EXCEPTION, reason_code: 'AI_ERROR', reason_text: r.error && r.error.message, links: {} });
+    else results.push({ document_id: String(items[i].document_id), file_name: items[i].file_name, mode, status: STATUS.EXCEPTION, reason_code: 'AI_ERROR', reason_text: errorMessage(r.error), links: {} });
   });
 }
 

@@ -12,6 +12,8 @@ const { createRateLimiter, mapWithConcurrency } = require('../src/util/limiter')
 const { buildBillPayload, paymentTermsFromPo } = require('../src/pipeline/bill');
 const { loadConfig, assertRuntimeConfig } = require('../src/config');
 const { createSmtpMailer, createMailer } = require('../src/report/mailers');
+const { createLogger, describeError, errorMessage } = require('../src/logger');
+const { JsonFileStore } = require('../src/state/store');
 
 test('matchTotals: within tolerance on PO total', () => {
   const m = matchTotals({ invoiceGross: 120.01, poTotal: 120.0, tolerance: 0.02 });
@@ -160,4 +162,33 @@ test('log mailer: sends nothing, writes the text report to stdout', async () => 
   } finally { console.log = orig; }
   assert.equal(logs[0][0], 'mail.skipped');
   assert.ok(out.join('\n').includes('TEXT REPORT'));
+});
+
+test('logger: every level goes to stdout as one JSON line; errors of any shape are described', () => {
+  const out = []; const sink = { log: (l) => out.push(l), warn: () => { throw new Error('stderr must not be used'); }, error: () => { throw new Error('stderr must not be used'); } };
+  const log = createLogger({ sink, level: 'info' });
+  const e = new Error('boom'); e.code = 'E1'; e.status = 429;
+  log.error('x', { error: e }); log.warn('y', { error: { status: 400, data: { message: 'bad column' }, api_key: 'k' } }); log.info('z', { error: 'plain' });
+  const [a, b, c] = out.map((l) => JSON.parse(l));
+  assert.equal(a.lvl, 'error'); assert.equal(a.error.message, 'boom'); assert.equal(a.error.code, 'E1'); assert.equal(a.error.status, 429);
+  assert.equal(b.lvl, 'warn'); assert.equal(b.error.status, 400); assert.ok(b.error.detail.includes('bad column')); assert.ok(!b.error.detail.includes('"k"'));
+  assert.equal(c.error.message, 'plain');
+  assert.equal(errorMessage(undefined), 'undefined'); assert.equal(errorMessage(new Error('m')), 'm');
+  assert.ok(errorMessage({ status: 500, data: { x: 1 } }).includes('"x":1'));
+  assert.deepEqual(Object.keys(describeError('s')), ['message']);
+});
+test('retry window: transient reasons (AI/Books/attach) are retried on the next run, others after RETRY_AFTER_HOURS', async () => {
+  const store = new JsonFileStore();
+  const t0 = new Date('2026-11-04T10:00:00Z');
+  const row = (id, reason_code, status = 'EXCEPTION') => ({ document_id: id, file_name: id, status, reason_code, attempts: 1, last_attempt: t0.toISOString(), first_seen: t0.toISOString() });
+  await store.upsert(row('ai', 'AI_ERROR')); await store.upsert(row('books', 'BOOKS_ERROR')); await store.upsert(row('att', 'ATTACH_FAILED', 'BILLED_NO_ATTACH'));
+  await store.upsert(row('po', 'PO_NOT_FOUND')); await store.upsert(row('wb', null, 'WOULD_BILL')); await store.upsert(row('dup', 'DUPLICATE', 'DUPLICATE'));
+  const at = (min) => new Date(t0.getTime() + min * 60000);
+  const ids = (rows) => rows.map((r) => r.document_id).sort();
+  // 30 min later: only the transient ones
+  assert.deepEqual(ids(await store.listRetryCandidates({ olderThan: at(30 - 12 * 60), transientOlderThan: at(30), maxAttempts: 5, limit: 50 })), ['ai', 'att', 'books']);
+  // 13 h later: everything retryable
+  assert.deepEqual(ids(await store.listRetryCandidates({ olderThan: at(13 * 60 - 12 * 60), transientOlderThan: at(13 * 60), maxAttempts: 5, limit: 50 })), ['ai', 'att', 'books', 'po', 'wb']);
+  // attempts cap still applies to transient ones
+  assert.deepEqual(ids(await store.listRetryCandidates({ olderThan: at(30 - 12 * 60), transientOlderThan: at(30), maxAttempts: 1, limit: 50 })), []);
 });

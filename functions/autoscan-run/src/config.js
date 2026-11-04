@@ -67,7 +67,8 @@ function loadConfig(env = process.env) {
       maxNewPerRun: num(env.MAX_NEW_PER_RUN, 40),
       maxRetryPerRun: num(env.MAX_RETRY_PER_RUN, 20),
       concurrency: num(env.CONCURRENCY, 3),
-      retryAfterHours: num(env.RETRY_AFTER_HOURS, 12),
+      retryAfterHours: num(env.RETRY_AFTER_HOURS, 12), // human-fixable exceptions (PO missing, total mismatch…)
+      retryTransientAfterMinutes: num(env.RETRY_TRANSIENT_AFTER_MINUTES, 0), // AI/Books/attach errors: 0 = next run
       maxAttempts: num(env.MAX_ATTEMPTS, 5),
       timeBudgetRatio: num(env.TIME_BUDGET_RATIO, 0.7),
       lockStaleMinutes: num(env.LOCK_STALE_MINUTES, 15),

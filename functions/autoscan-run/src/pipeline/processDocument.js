@@ -1,5 +1,7 @@
 'use strict';
 
+const { errorMessage } = require('../logger');
+
 const { STATUS } = require('../state/store');
 const { reason } = require('./reasons');
 const { resolvePurchaseOrder } = require('./resolvePo');
@@ -88,7 +90,7 @@ async function processDocument(ctx, doc, prior) {
           result.ai = { model: rec.model, tokens_in: rec.tokens_in, tokens_out: rec.tokens_out };
         } catch (err) {
           logger.warn('extraction.failed', { document_id: documentId, error: err });
-          return finish(STATUS.EXCEPTION, reason('AI_ERROR', err.message));
+          return finish(STATUS.EXCEPTION, reason('AI_ERROR', errorMessage(err)));
         }
       }
     }
@@ -190,7 +192,7 @@ async function processDocument(ctx, doc, prior) {
     logger.error('document.failed', { document_id: documentId, error: err });
     if (err && err.code === 'BOOKS_DAILY_LIMIT') throw err; // let the run stop cleanly
     const code = err && String(err.code || '').startsWith('BOOKS') ? 'BOOKS_ERROR' : 'AI_ERROR';
-    return finish(STATUS.EXCEPTION, reason(code, err && err.message));
+    return finish(STATUS.EXCEPTION, reason(code, errorMessage(err)));
   }
 }
 

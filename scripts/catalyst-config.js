@@ -31,9 +31,9 @@ const DEPLOY_VARS = [
   'MAIL_TRANSPORT', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASS',
   'LOG_LEVEL',
 ];
-const REQUIRED = ['BOOKS_ORG_ID', 'BOOKS_CLIENT_ID', 'BOOKS_CLIENT_SECRET', 'BOOKS_REFRESH_TOKEN', 'ANTHROPIC_API_KEY'];
-// Mail: log needs nothing; smtp needs the mailbox; catalyst needs a sender verified (with its domain) in the Console.
-const MAIL_REQUIRED = { log: [], smtp: ['REPORT_TO', 'SMTP_USER', 'SMTP_PASS'], catalyst: ['REPORT_TO', 'REPORT_FROM'] }[(process.env.MAIL_TRANSPORT || 'log').toLowerCase()] || [];
+const REQUIRED = ['BOOKS_ORG_ID', 'BOOKS_CLIENT_ID', 'BOOKS_CLIENT_SECRET', 'BOOKS_REFRESH_TOKEN', 'ANTHROPIC_API_KEY', 'REPORT_TO'];
+// Mail: smtp needs the SMTP account; catalyst needs a sender verified in the Console.
+const MAIL_REQUIRED = (process.env.MAIL_TRANSPORT || 'catalyst').toLowerCase() === 'smtp' ? ['SMTP_USER', 'SMTP_PASS'] : ['REPORT_FROM'];
 
 const check = process.argv.includes('--check');
 const example = JSON.parse(fs.readFileSync(EXAMPLE, 'utf8'));
