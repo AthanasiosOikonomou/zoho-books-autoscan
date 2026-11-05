@@ -89,18 +89,51 @@ const POS = [
     invoices: [{ suffix: 'A', label: 'Unit price +0.05 → invoice 42p over the PO, inside the £1 tolerance → BILLED with the invoice total (bill adjustment)', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { combi1: 0.05 } }] },
 ];
 
-/** Build the custom_fields update for the labels whose value differs; report labels that do not exist on the entity. */
-function customFieldValues(existing, wanted) {
-  const changes = []; const missing = [];
+/**
+ * Custom-field definitions per entity. Books omits a custom field from an entity's `custom_fields` while it has no
+ * value, so the definitions come from Settings (several endpoint spellings exist across DCs/versions); as a last
+ * resort the api_name is derived from the label the way Books does (`cf_<slug>`, sandbox: `cf__sb_<org>_<slug>`).
+ */
+async function customFieldDefs(books, entity, orgId) {
+  const defs = new Map(); // label (lower) → { id, api_name, data_type }
+  const add = (f) => { if (f && f.label) defs.set(String(f.label).trim().toLowerCase(), { id: f.customfield_id || f.field_id || null, api_name: f.api_name || f.placeholder || null, data_type: f.data_type || null }); };
+  for (const p of [`/settings/preferences/customfields?entity=${entity}`, `/settings/customfields?entity=${entity}`, `/settings/preferences/${entity}`]) {
+    try {
+      const json = await books.request(p);
+      const list = json.custom_fields || (json.customfields) || (json[entity] && json[entity].custom_fields) || [];
+      for (const f of list) add(f);
+      if (defs.size) break;
+    } catch (_) { /* try the next spelling */ }
+  }
+  return {
+    resolve(label) {
+      const l = String(label).trim().toLowerCase();
+      if (defs.has(l)) return defs.get(l);
+      const slug = l.replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+      const sb = /sandbox/i.test(String(orgId.name || '')) || orgId.sandbox;
+      return { id: null, api_name: `cf_${sb ? `_sb_${orgId.id}_` : ''}${slug}`, data_type: null, guessed: true };
+    },
+  };
+}
+
+/** Build the custom_fields update for the labels whose value differs from what the entity carries. */
+function customFieldValues(existing, wanted, defs) {
+  const changes = []; const missing = []; const guessed = [];
   const list = existing || [];
   for (const [label, value] of Object.entries(wanted)) {
-    const f = list.find((x) => String(x.label || '').trim().toLowerCase() === label);
-    if (!f) { missing.push(label); continue; }
+    const onEntity = list.find((x) => String(x.label || '').trim().toLowerCase() === label);
+    const def = onEntity ? { id: onEntity.customfield_id || onEntity.field_id, api_name: onEntity.api_name, data_type: onEntity.data_type } : defs.resolve(label);
+    if (!def || (!def.id && !def.api_name)) { missing.push(label); continue; }
     const want = value === null || value === undefined ? '' : String(value);
-    const have = f.value === null || f.value === undefined ? '' : String(f.value);
-    if (want !== have && !(f.data_type === 'decimal' && Number(want) === Number(have))) changes.push({ customfield_id: f.customfield_id || f.field_id, value: f.data_type === 'decimal' ? Number(want) : want });
+    const have = onEntity && onEntity.value !== null && onEntity.value !== undefined ? String(onEntity.value) : '';
+    const isNum = def.data_type === 'decimal' || def.data_type === 'number' || (!def.data_type && want !== '' && !Number.isNaN(Number(want)) && /tolerance/.test(label));
+    if (want === have || (isNum && Number(want) === Number(have))) continue;
+    const upd = { value: isNum ? Number(want) : want };
+    if (def.id) upd.customfield_id = def.id; else upd.api_name = def.api_name;
+    if (def.guessed) guessed.push(def.api_name);
+    changes.push(upd);
   }
-  return { changes, missing };
+  return { changes, missing, guessed };
 }
 
 (async () => {
@@ -120,6 +153,11 @@ function customFieldValues(existing, wanted) {
   const logger = createLogger({ level: 'warn' });
   const books = createBooksClient({ config: config.books, tokenProvider: createTokenProvider(config.books), logger });
   const out = { org_id: config.books.orgId, created_at: new Date().toISOString(), vendors: {}, items: {}, pos: {} };
+  const orgs = await books.listOrganizations().catch(() => []);
+  const thisOrg = orgs.find((o) => String(o.organization_id) === String(config.books.orgId)) || {};
+  const orgInfo = { id: config.books.orgId, name: thisOrg.name || '', sandbox: !!thisOrg.is_sandbox_org };
+  const vendorDefs = await customFieldDefs(books, 'vendor', orgInfo);
+  const itemDefs = await customFieldDefs(books, 'item', orgInfo);
 
   // vendors
   for (const v of VENDORS) {
@@ -134,11 +172,13 @@ function customFieldValues(existing, wanted) {
     } else console.log(`= vendor ${v.name} (${c.contact_id})`);
     // Phase 2: vendor custom fields "Carriage Rule" / "Carriage Tolerance" (created once in the UI; written here by label)
     const full = (await books.request(`/contacts/${c.contact_id}`)).contact || c;
-    const cfUpdates = customFieldValues(full.custom_fields, { 'carriage rule': v.carriageRule, 'carriage tolerance': v.carriageTolerance });
+    const cfUpdates = customFieldValues(full.custom_fields, { 'carriage rule': v.carriageRule, 'carriage tolerance': v.carriageTolerance }, vendorDefs);
     if (cfUpdates.missing.length) console.log(`! vendor custom field(s) not found: ${cfUpdates.missing.join(', ')} — create them in the UI (Settings → Preferences → Vendors → Custom Fields): "Carriage Rule" dropdown Zero/Fixed/Ignore, "Carriage Tolerance" decimal`);
     if (cfUpdates.changes.length) {
-      await books.request(`/contacts/${c.contact_id}`, { method: 'PUT', json: { custom_fields: cfUpdates.changes } });
-      console.log(`  ~ ${v.name}: carriage ${v.carriageRule}${v.carriageRule === 'Fixed' ? ` ±${v.carriageTolerance}` : ''}`);
+      try {
+        await books.request(`/contacts/${c.contact_id}`, { method: 'PUT', json: { custom_fields: cfUpdates.changes } });
+        console.log(`  ~ ${v.name}: carriage ${v.carriageRule}${v.carriageRule === 'Fixed' ? ` ±${v.carriageTolerance}` : ''}${cfUpdates.guessed.length ? ` (via ${cfUpdates.guessed.join(', ')})` : ''}`);
+      } catch (err) { console.log(`! ${v.name}: could not write carriage fields (${err.message}) — set them in the UI: ${v.carriageRule}${v.carriageRule === 'Fixed' ? ` / ${v.carriageTolerance}` : ''}`); }
     }
     out.vendors[v.key] = { contact_id: c.contact_id, name: v.name, terms: v.terms, carriageRule: v.carriageRule, carriageTolerance: v.carriageTolerance };
   }
@@ -153,9 +193,12 @@ function customFieldValues(existing, wanted) {
     } else console.log(`= item ${it.name} (${i.item_id})`);
     // Phase 2: item custom field "Supplier Reference" (production prints it on PO lines; mirrored here) = the supplier's code
     const fullItem = (await books.request(`/items/${i.item_id}`)).item || i;
-    const cfu = customFieldValues(fullItem.custom_fields, { 'supplier reference': it.mpn });
+    const cfu = customFieldValues(fullItem.custom_fields, { 'supplier reference': it.mpn }, itemDefs);
     if (cfu.missing.length && it === ITEMS[0]) console.log(`! item custom field "Supplier Reference" not found — create it in the UI (Settings → Preferences → Items → Custom Fields, type Text, show on PDF) and re-run`);
-    if (cfu.changes.length) { await books.request(`/items/${i.item_id}`, { method: 'PUT', json: { custom_fields: cfu.changes } }); console.log(`  ~ ${it.name}: Supplier Reference ${it.mpn}`); }
+    if (cfu.changes.length) {
+      try { await books.request(`/items/${i.item_id}`, { method: 'PUT', json: { custom_fields: cfu.changes } }); console.log(`  ~ ${it.name}: Supplier Reference ${it.mpn}${cfu.guessed.length ? ` (via ${cfu.guessed.join(', ')})` : ''}`); }
+      catch (err) { console.log(`! ${it.name}: could not write Supplier Reference (${err.message}) — does the item custom field exist? (Settings → Preferences → Items → Custom Fields, Text, label exactly "Supplier Reference")`); }
+    }
     out.items[it.key] = { item_id: i.item_id, name: it.name, sku: it.sku, mpn: it.mpn, rate: it.rate };
   }
 
