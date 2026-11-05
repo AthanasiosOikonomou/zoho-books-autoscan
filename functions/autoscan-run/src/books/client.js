@@ -212,7 +212,8 @@ function createBooksClient({ config, tokenProvider, logger, fetchImpl = fetch, s
   async function getPaymentTerms() {
     // The list key differs between DCs/versions (payment_terms | paymentterms | payment_terms_settings…): take the first array of term objects.
     const json = await request('/settings/paymentterms');
-    const candidates = [json.payment_terms, json.paymentterms, json.payment_terms_settings, ...Object.values(json)].filter(Array.isArray);
+    const data = json.data && typeof json.data === 'object' ? json.data : {};
+    const candidates = [json.payment_terms, data.payment_terms, json.paymentterms, ...Object.values(json), ...Object.values(data)].filter(Array.isArray);
     const list = candidates.find((a) => a.some((t) => t && (t.payment_terms_label !== undefined || t.payment_terms !== undefined))) || [];
     return list.map((t) => ({ ...t, payment_terms: Number(t.payment_terms) }));
   }
