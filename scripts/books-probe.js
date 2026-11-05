@@ -43,6 +43,13 @@ const { createBooksClient } = fn('books/client');
 
   // ---- raw-shape probes for Phase 2 (print the keys we have to map; values are the sandbox's own seed data)
   const arg = argv[1];
+  if (what === 'raw') {
+    // raw GET of any Books path, e.g. raw /settings/paymentterms — prints keys and a trimmed body (no secrets in these endpoints)
+    const json = await books.request(arg);
+    console.log(`\nGET ${arg} → keys: ${Object.keys(json).join(', ')}`);
+    console.log(JSON.stringify(json, null, 1).slice(0, 1500));
+    return;
+  }
   if (what === 'find') {
     const { candidatesFor } = fn('pipeline/resolvePo');
     const cands = candidatesFor(arg, config.matching);
