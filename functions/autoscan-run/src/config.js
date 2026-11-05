@@ -61,6 +61,15 @@ function loadConfig(env = process.env) {
       poExample: env.PO_EXAMPLE || `${env.PO_PREFIX || 'PO-'}${'235'.padStart(num(env.PO_PAD_WIDTH, 5), '0')}`, // shown to the model as "the Books format" (production: PR-00123)
       compareAgainstRemaining: bool(env.MATCH_AGAINST_REMAINING, true),
       phase2Enabled: bool(env.PHASE2_ENABLED, false),
+      // --- Phase 2: line-level matching
+      linePriceTolerancePct: num(env.LINE_PRICE_TOLERANCE_PCT, 5), // per line, ± % of the PO unit price (client to confirm)
+      linePriceToleranceAbs: num(env.LINE_PRICE_TOLERANCE_ABS, 0.05), // GBP floor for cheap items
+      acceptLowerPrice: bool(env.ACCEPT_LOWER_PRICE, true), // invoice below PO beyond the tolerance → bill at the invoice price, noted (client to confirm)
+      supplierRefLabel: env.SUPPLIER_REF_LABEL || 'Supplier Reference', // item custom field printed on the PO
+      carriageItemId: env.CARRIAGE_ITEM_ID || '', // Books item used for carriage on bills when the PO has no carriage line (else: first line's account)
+      carriageRuleLabel: env.CARRIAGE_RULE_LABEL || 'Carriage Rule', // vendor custom fields
+      carriageToleranceLabel: env.CARRIAGE_TOLERANCE_LABEL || 'Carriage Tolerance',
+      defaultCarriageRule: env.DEFAULT_CARRIAGE_RULE || 'Zero',
     },
 
     // --- Queue / run behaviour ---------------------------------------------

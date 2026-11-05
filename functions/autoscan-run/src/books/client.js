@@ -218,6 +218,10 @@ function createBooksClient({ config, tokenProvider, logger, fetchImpl = fetch, s
     const json = await request(`/contacts/${contactId}`);
     return json.contact;
   }
+  async function getItem(itemId) {
+    const json = await request(`/items/${itemId}`);
+    return json.item;
+  }
 
   async function listOrganizations() {
     const json = await request('/organizations');
@@ -247,6 +251,7 @@ function createBooksClient({ config, tokenProvider, logger, fetchImpl = fetch, s
     attachToVendorCredit,
     getPaymentTerms,
     getContact,
+    getItem,
     listOrganizations,
   };
 }

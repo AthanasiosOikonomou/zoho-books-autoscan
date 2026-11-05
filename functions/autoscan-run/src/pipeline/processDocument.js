@@ -6,6 +6,8 @@ const { STATUS } = require('../state/store');
 const { reason } = require('./reasons');
 const { resolvePurchaseOrder } = require('./resolvePo');
 const { processCreditNote } = require('./creditNote');
+const { matchLines } = require('./lines');
+const { getVendorRule } = require('./vendorRules');
 const { matchTotals, sumBilled } = require('./match');
 const { buildBillPayload, paymentTermsFromPo, createBillWithAttachment } = require('./bill');
 const { detectMime, isSupported, estimatePageCount } = require('../util/mime');
@@ -141,19 +143,39 @@ async function processDocument(ctx, doc, prior) {
       }
     }
 
-    // ---------------------------------------------------------------- 4. match (Phase 1 totals)
-    const linkedBills = config.matching.compareAgainstRemaining ? await books.searchBills({ purchaseorder_id: po.purchaseorder_id }) : [];
-    const m = matchTotals({
-      invoiceGross: extraction.totals.gross,
-      poTotal: po.total,
-      billedTotal: sumBilled(linkedBills),
-      tolerance: config.matching.totalTolerance,
-      compareAgainstRemaining: config.matching.compareAgainstRemaining,
-    });
-    result.match = m;
-    if (!m.ok) {
-      const txt = `invoice ${fmt(m.invoiceGross)} vs PO ${fmt(m.poTotal)}${m.billedTotal ? ` (remaining ${fmt(m.remaining)})` : ''}, diff ${fmt(m.difference)}`;
-      return finish(STATUS.EXCEPTION, reason('TOTAL_MISMATCH', txt));
+    // ---------------------------------------------------------------- 4. match
+    //    Phase 2 (PHASE2_ENABLED): invoice lines ↔ PO lines by Supplier Reference / MPN / SKU, quantities ≤ remaining,
+    //    prices within tolerance, carriage per vendor rule → partial bill at the invoice prices.
+    //    Phase 1 (or Phase 2 fallback when the PO lines carry no codes): invoice total vs PO total / remaining.
+    let lineMatch = null;
+    if (config.matching.phase2Enabled) {
+      const vendorRule = await getVendorRule(ctx, books, po.vendor_id, { ruleLabel: config.matching.carriageRuleLabel, toleranceLabel: config.matching.carriageToleranceLabel, defaultRule: config.matching.defaultCarriageRule });
+      const items = await itemsForPo(ctx, books, po, config.matching, logger);
+      lineMatch = matchLines({ extraction, po, items, vendorRule, config: config.matching });
+      result.lines = { matched: lineMatch.matched, problems: lineMatch.problems, carriage: lineMatch.carriage, expected: lineMatch.expected, partial: lineMatch.partial, fallback: lineMatch.fallback || null };
+      if (lineMatch.notes.length) result.note = lineMatch.notes.join('; ');
+      if (!lineMatch.fallback && !lineMatch.ok) {
+        return finish(STATUS.EXCEPTION, reason(lineMatch.reason.code, lineMatch.reason.text));
+      }
+      if (lineMatch.fallback) logger.info('lines.fallback', { document_id: documentId, po: po.purchaseorder_number, reason: lineMatch.reason.text });
+    }
+    const useTotals = !lineMatch || lineMatch.fallback;
+    if (useTotals) {
+      const linkedBills = config.matching.compareAgainstRemaining ? await books.searchBills({ purchaseorder_id: po.purchaseorder_id }) : [];
+      const m = matchTotals({
+        invoiceGross: extraction.totals.gross,
+        poTotal: po.total,
+        billedTotal: sumBilled(linkedBills),
+        tolerance: config.matching.totalTolerance,
+        compareAgainstRemaining: config.matching.compareAgainstRemaining,
+      });
+      result.match = m;
+      if (!m.ok) {
+        const txt = `invoice ${fmt(m.invoiceGross)} vs PO ${fmt(m.poTotal)}${m.billedTotal ? ` (remaining ${fmt(m.remaining)})` : ''}, diff ${fmt(m.difference)}${lineMatch ? ` — ${lineMatch.reason.text}` : ''}`;
+        return finish(STATUS.EXCEPTION, reason('TOTAL_MISMATCH', txt));
+      }
+    } else {
+      result.match = { ok: true, basis: 'lines', difference: lineMatch.expected.diff, invoiceGross: lineMatch.expected.invoiceGross, expected: lineMatch.expected.gross };
     }
 
     // ---------------------------------------------------------------- 5. bill
@@ -173,12 +195,29 @@ async function processDocument(ctx, doc, prior) {
     }
 
     const template = await books.getBillFromPurchaseOrders(po.purchaseorder_id);
-    // Safety net: Books computes the template's total from the quantities it proposes
-    // (remaining quantities on a partially billed PO). If that is not the invoice
-    // amount, creating the bill would post the wrong figure — stop here instead.
-    const templateTotal = Number(template && template.total);
-    if (Number.isFinite(templateTotal) && Math.abs(templateTotal - extraction.totals.gross) > config.matching.totalTolerance) {
-      return finish(STATUS.EXCEPTION, reason('BILL_TEMPLATE_MISMATCH', `Books would bill ${fmt(templateTotal)} from the PO's remaining quantities but the invoice is ${fmt(extraction.totals.gross)}`));
+    let quantities = null; let rates = null; const extraLines = []; let expectedTotal = null;
+    if (useTotals) {
+      // Safety net: Books computes the template's total from the quantities it proposes
+      // (remaining quantities on a partially billed PO). If that is not the invoice
+      // amount, creating the bill would post the wrong figure — stop here instead.
+      const templateTotal = Number(template && template.total);
+      if (Number.isFinite(templateTotal) && Math.abs(templateTotal - extraction.totals.gross) > config.matching.totalTolerance) {
+        return finish(STATUS.EXCEPTION, reason('BILL_TEMPLATE_MISMATCH', `Books would bill ${fmt(templateTotal)} from the PO's remaining quantities but the invoice is ${fmt(extraction.totals.gross)}`));
+      }
+    } else {
+      // Phase 2: bill exactly what the invoice says — invoiced quantities, invoice prices, invoice carriage
+      quantities = { ...lineMatch.quantities };
+      rates = { ...lineMatch.rates };
+      expectedTotal = lineMatch.expected.gross;
+      const c = lineMatch.carriage;
+      if (c.invoice > 0) {
+        if (c.poLineId) { quantities[c.poLineId] = 1; rates[c.poLineId] = c.invoice; }
+        else extraLines.push(carriageLine(template, c.invoice, config.matching.carriageItemId));
+      }
+      const tl = template.line_items || [];
+      for (const id of Object.keys(quantities)) if (!tl.some((t) => String(t.purchaseorder_item_id) === String(id))) {
+        return finish(STATUS.EXCEPTION, reason('BILL_TEMPLATE_MISMATCH', `PO line ${id} is not billable any more (fully billed or cancelled)`));
+      }
     }
     const payload = buildBillPayload({
       template,
@@ -186,6 +225,7 @@ async function processDocument(ctx, doc, prior) {
       invoiceDate: extraction.invoice_date,
       paymentTermsDays: terms_ ? terms_.days : undefined,
       paymentTermsLabel: terms_ ? terms_.label : undefined,
+      quantities, rates, extraLines, expectedTotal,
       invoiceGross: extraction.totals.gross,
       adjustToInvoice: config.matching.billAdjustToInvoice,
     });
@@ -210,6 +250,34 @@ async function processDocument(ctx, doc, prior) {
     const code = err && String(err.code || '').startsWith('BOOKS') ? 'BOOKS_ERROR' : 'AI_ERROR';
     return finish(STATUS.EXCEPTION, reason(code, errorMessage(err)));
   }
+}
+
+/** Books items for the PO lines that carry no Supplier Reference (MPN/SKU fallback), fetched once per run per item. */
+async function itemsForPo(ctx, books, po, matching, logger) {
+  const cache = ctx.items || (ctx.items = new Map());
+  const want = String(matching.supplierRefLabel || 'Supplier Reference').trim().toLowerCase();
+  const out = new Map();
+  for (const l of po.line_items || []) {
+    if (!l.item_id) continue;
+    const hasRef = (l.item_custom_fields || []).some((f) => String(f.label || '').trim().toLowerCase() === want && f.value);
+    if (hasRef) continue;
+    const id = String(l.item_id);
+    if (!cache.has(id)) {
+      try { cache.set(id, await books.getItem(id)); } catch (err) { logger.warn('item.fetch_failed', { item_id: id, error: err }); cache.set(id, null); }
+    }
+    if (cache.get(id)) out.set(id, cache.get(id));
+  }
+  return out;
+}
+
+/** A carriage line for a bill whose PO has no carriage line: the configured carriage item, else the first line's account. */
+function carriageLine(template, amount, carriageItemId) {
+  const first = (template.line_items || [])[0] || {};
+  const li = { name: 'Carriage', description: 'Carriage / delivery as invoiced', quantity: 1, rate: amount };
+  if (carriageItemId) li.item_id = carriageItemId;
+  else if (first.account_id) li.account_id = first.account_id;
+  if (first.tax_id) li.tax_id = first.tax_id;
+  return li;
 }
 
 async function downloadAsDocument(books, documentId, fileName) {

@@ -14,7 +14,7 @@
  * Phase 1: full PO quantities (as the template provides them).
  * Phase 2 passes `quantities` = { purchaseorder_item_id: invoicedQty } to bill partially.
  */
-function buildBillPayload({ template, invoiceNumber, invoiceDate, paymentTermsDays, paymentTermsLabel, quantities = null, maxBillNumberLen = 50, invoiceGross = null, adjustToInvoice = false }) {
+function buildBillPayload({ template, invoiceNumber, invoiceDate, paymentTermsDays, paymentTermsLabel, quantities = null, rates = null, extraLines = [], maxBillNumberLen = 50, invoiceGross = null, adjustToInvoice = false, expectedTotal = null }) {
   const billNumber = String(invoiceNumber || '').trim().slice(0, maxBillNumberLen) || `bill-${Date.now()}`;
 
   const lineItems = [];
@@ -28,12 +28,13 @@ function buildBillPayload({ template, invoiceNumber, invoiceDate, paymentTermsDa
       description: it.description,
       account_id: it.account_id,
       quantity: qty,
-      rate: it.rate,
+      rate: rates && rates[it.purchaseorder_item_id] !== undefined ? rates[it.purchaseorder_item_id] : it.rate, // Phase 2: the invoice price
     };
     if (it.tax_id) li.tax_id = it.tax_id;
     if (it.unit) li.unit = it.unit;
     lineItems.push(li);
   }
+  for (const x of extraLines || []) lineItems.push(x); // e.g. carriage when the PO has no carriage line
 
   const payload = {
     vendor_id: template.vendor_id,
@@ -53,15 +54,16 @@ function buildBillPayload({ template, invoiceNumber, invoiceDate, paymentTermsDa
 
   // The bill must show the supplier's invoice total, not the PO's. Books prices the bill from the PO lines
   // (template.total); any difference inside the tolerance (rounding, pence) is posted as a bill adjustment.
-  const adj = billAdjustment({ template, invoiceGross, adjustToInvoice, quantities });
+  const adj = billAdjustment({ template, invoiceGross, adjustToInvoice, quantities, expectedTotal });
   if (adj) { payload.adjustment = adj; payload.adjustment_description = `Adjusted to supplier invoice ${billNumber} total`; }
   return payload;
 }
 
 /** Difference invoice − template total (2 dp), or 0 when disabled / unknown / below a penny. Full-quantity bills only (partial bills are priced by Phase 2). */
-function billAdjustment({ template, invoiceGross, adjustToInvoice, quantities }) {
-  if (!adjustToInvoice || quantities) return 0;
-  const t = Number(template && template.total);
+function billAdjustment({ template, invoiceGross, adjustToInvoice, quantities, expectedTotal = null }) {
+  if (!adjustToInvoice) return 0;
+  if (quantities && expectedTotal === null) return 0; // partial bill without a computed total: nothing to compare with
+  const t = expectedTotal !== null ? Number(expectedTotal) : Number(template && template.total);
   const g = Number(invoiceGross);
   if (!Number.isFinite(t) || !Number.isFinite(g)) return 0;
   const d = Math.round((g - t) * 100) / 100;
