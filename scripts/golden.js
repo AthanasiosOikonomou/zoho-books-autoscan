@@ -81,7 +81,8 @@ const { candidatesFor } = fn('pipeline/resolvePo');
   md.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
   rows.forEach((r, i) => {
     if (r.error) { md.push(`| ${i + 1} | ${esc(r.file)} | ERROR | ${esc(r.error)} |||||||||||`); return; }
-    const sumFlag = r.net !== null && r.lines && Math.abs(r.lines_sum - r.net) > 0.05 ? ` ⚠ ≠ net` : '';
+    const netGoods = r.net !== null && r.net !== undefined ? [r.net, r.net - (r.carriage || 0)] : [];
+    const sumFlag = r.lines && netGoods.length && !netGoods.some((n) => Math.abs(r.lines_sum - n) <= 0.05) ? ` ⚠ ≠ net` : '';
     md.push(`| ${i + 1} | ${esc(r.file)} | ${r.type} | ${esc(r.supplier)} | ${esc(r.invoice_number)} | ${r.invoice_date || ''} | ${esc(r.po_reference)} | ${num(r.net)} | ${num(r.vat)} | ${num(r.carriage)} | ${num(r.gross)} | ${r.lines} (${r.lines_without_code}) | ${num(r.lines_sum)}${sumFlag} | ${Math.round((r.confidence || 0) * 100)}% | ${esc(r.notes)} |`);
   });
   md.push('', '## Line codes read (first 6 per document)', '');

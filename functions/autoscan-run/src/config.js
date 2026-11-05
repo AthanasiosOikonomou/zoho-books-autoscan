@@ -43,7 +43,7 @@ function loadConfig(env = process.env) {
       model: env.CLAUDE_MODEL || 'claude-haiku-5-5',
       fallbackModel: env.CLAUDE_FALLBACK_MODEL || '', // e.g. a Sonnet id; '' = disabled
       fallbackBelowConfidence: num(env.CLAUDE_FALLBACK_BELOW_CONFIDENCE, 0), // 0 = never
-      maxOutputTokens: num(env.CLAUDE_MAX_OUTPUT_TOKENS, 1200),
+      maxOutputTokens: num(env.CLAUDE_MAX_OUTPUT_TOKENS, 6000), // a 16-line invoice needs ~1,500; only used tokens are billed
       timeoutMs: num(env.CLAUDE_TIMEOUT_MS, 60000),
       maxRetries: num(env.CLAUDE_MAX_RETRIES, 2),
       pageCap: num(env.CLAUDE_PAGE_CAP, 6),

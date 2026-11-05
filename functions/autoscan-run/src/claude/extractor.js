@@ -65,6 +65,12 @@ function createExtractor({ client, config, logger, poExample }) {
       }],
     }, { timeout: config.timeoutMs, maxRetries: config.maxRetries });
 
+    if (res.stop_reason === 'max_tokens') {
+      // A truncated tool call parses into an empty/garbage extraction (0 lines, confidence 0) — never accept that silently.
+      const err = new Error(`Claude output truncated at ${config.maxOutputTokens} tokens (long document) — raise CLAUDE_MAX_OUTPUT_TOKENS`);
+      err.code = 'AI_TRUNCATED';
+      throw err;
+    }
     const toolBlock = (res.content || []).find((b) => b.type === 'tool_use');
     if (!toolBlock) {
       const err = new Error('Claude returned no tool_use block');
