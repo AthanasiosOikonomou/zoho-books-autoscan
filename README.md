@@ -2,9 +2,9 @@
 
 Zoho Books supplier-invoice → bill automation, running on **Zoho Catalyst** (EU DC, the client's account) with **Claude** for document reading. Replaces a previous Deluge scheduled function.
 
-> Status (4 Nov 2026): **Phase 1 deployed and proven** on the client's Catalyst project (Development env) against the Books sandbox — scan → read → match → bill (at the invoice total) → report, automatic reconciliation, de-duplication, **credit notes → vendor credits** (applied to the bill, PDF attached), and the **once-a-day HTML digest** — all verified live. The digest goes to the function log until the client provides a mailbox. Production stays in **dry-run** until UAT sign-off.
+> Status (5 Nov 2026): **Phase 1 and Phase 2 deployed and proven** on the client's Catalyst project (Development env) against the Books sandbox — scan → read → match → bill (at the invoice total) → report, automatic reconciliation, de-duplication, **credit notes → vendor credits** (applied to the bill, PDF attached), the **once-a-day HTML digest**, and **line-by-line matching** (Supplier Reference / MPN / SKU, partial deliveries, vendor carriage rules) — all verified live. The 13-document golden set of real supplier invoices reads correctly. The digest goes to the function log until the client provides a mailbox. Production stays in **dry-run** until UAT sign-off.
 
-**Next:** golden set of real supplier invoices (client to send) → prompt tuning → Phase 2 (vendor carriage rules, MPN line matching, partial bills — needs the client's answers on the MPN field and carriage ownership) → UAT → production.
+**Next:** client's answer on the price policy (per-line tolerance, accept-lower-price) → report mailbox → UAT with finance → production promotion.
 
 ## What it does
 
@@ -91,7 +91,7 @@ All tunables are environment variables (`.env` locally, Catalyst env vars deploy
 ## Backlog (agreed with the client, not started)
 
 - **Report mailbox**: the daily email is built and verified; it goes to the log until the client provides a mailbox (`MAIL_TRANSPORT=smtp`, one deploy).
-- **Phase 2 sandbox verification**: implemented and unit-tested; run the seed scenarios with `PHASE2_ENABLED=true` and confirm the price tolerance / lower-price policy with the client.
+- **Price policy**: `LINE_PRICE_TOLERANCE_PCT` (5) and `ACCEPT_LOWER_PRICE` (true) are placeholders until the client confirms them — one env change, no code.
 - **Golden set**: real supplier invoices from the client through the sandbox before UAT.
 
 ## Rules

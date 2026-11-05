@@ -37,6 +37,9 @@ const OPEN_STATUSES = new Set([STATUS.EXCEPTION, STATUS.BILLED_NO_ATTACH, STATUS
 /** Reasons caused by us/the services, not by the document: retried on the next run instead of after RETRY_AFTER_HOURS. */
 const TRANSIENT_REASONS = new Set(['AI_ERROR', 'BOOKS_ERROR', 'ATTACH_FAILED']);
 
+/** Columns that are written as '' when the record holds null, so an update clears the previous value. */
+const CLEAR_ON_NULL = ['reason_code', 'reason_text'];
+
 const DOCUMENT_FIELDS = [
   'document_id', 'file_hash', 'file_name', 'mime', 'pages', 'status', 'reason_code', 'reason_text',
   'attempts', 'first_seen', 'last_attempt', 'vendor_id', 'vendor_name', 'po_id', 'po_number', 'bill_id', 'bill_number',
@@ -169,12 +172,16 @@ class CatalystStore {
     const out = { ...r };
     for (const f of dateFields) if (out[f]) out[f] = fromZcqlDateTime(out[f]);
     if (out.attempts !== undefined && out.attempts !== null) out.attempts = Number(out.attempts);
+    for (const f of CLEAR_ON_NULL) if (out[f] === '') out[f] = null;
     return out;
   }
 
   _toRow(record, fields, dateFields) {
     const row = {};
     for (const f of fields) if (record[f] !== undefined && record[f] !== null) row[f] = record[f];
+    // A partial update never touches columns that are absent from the row, so a reason that was explicitly
+    // cleared (null) must be sent as '' — otherwise a BILLED row keeps the reason of its last failed attempt.
+    for (const f of CLEAR_ON_NULL) if (fields.includes(f) && record[f] === null) row[f] = '';
     for (const f of dateFields) if (row[f]) row[f] = toZcqlDateTime(row[f]);
     if (typeof row.extraction_json === 'string' && row.extraction_json.length > TEXT_MAX) {
       try {

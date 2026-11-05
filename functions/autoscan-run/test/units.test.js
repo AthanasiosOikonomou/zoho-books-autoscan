@@ -316,3 +316,23 @@ test('store writes: a transient failure is retried, a permanent one is not', asy
   await assert.rejects(() => store._write('update', async () => { k++; throw 'Request failed with status 500 and code : X , message : down'; }, {}, { attempts: 2, backoffMs: 1 }), /down/);
   assert.equal(k, 2, 'gives up after the configured attempts');
 });
+
+test('CatalystStore: a cleared reason is written as empty string so the update overwrites the old value', async () => {
+  const { CatalystStore, DOCUMENT_FIELDS } = require('../src/state/store');
+  const calls = [];
+  const app = { zcql: () => ({}), datastore: () => ({ table: () => ({ updateRow: async (row) => { calls.push(row); return { ROWID: 123, MODIFIEDTIME: 'x' }; } }) }) };
+  const logger = { debug() {}, info() {}, warn() {}, error() {} };
+  const store = new CatalystStore({ app, logger });
+  store.rowIds.set('doc1', '123');
+  await store.upsert({ document_id: 'doc1', status: 'BILLED', reason_code: null, reason_text: null, bill_id: 'b1' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].reason_code, '');
+  assert.equal(calls[0].reason_text, '');
+  assert.equal(calls[0].bill_id, 'b1');
+  assert.ok(!('vendor_id' in calls[0]), 'undefined fields are still omitted from the update');
+  assert.ok(DOCUMENT_FIELDS.includes('reason_code'));
+  const back = store._fromRow({ document_id: 'doc1', status: 'BILLED', reason_code: '', reason_text: '', attempts: '2' }, []);
+  assert.equal(back.reason_code, null);
+  assert.equal(back.reason_text, null);
+  assert.equal(back.attempts, 2);
+});
