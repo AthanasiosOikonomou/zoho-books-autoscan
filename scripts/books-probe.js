@@ -11,6 +11,10 @@
  *   node scripts/books-probe.js po PO-00001 → one PO as the API returns it (line-item keys: sku? mpn? custom fields?)
  *   node scripts/books-probe.js item <item_id> → one item as the API returns it (mpn / sku / custom_fields)
  *   node scripts/books-probe.js vendor <contact_id> → one vendor (custom_fields → carriage rule / tolerance)
+ *   node scripts/books-probe.js find "IPO/354120" → how a supplier's PO reference resolves: PO number, then reference_number
+ *
+ * Any command accepts --org <organization_id> to look at ANOTHER org read-only (e.g. production, to check how
+ * legacy IPO/ references are stored and which item fields carry the MPN). Nothing here writes.
  */
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -21,8 +25,12 @@ const { createTokenProvider } = fn('books/oauth');
 const { createBooksClient } = fn('books/client');
 
 (async () => {
-  const what = process.argv[2] || 'all';
+  const argv = process.argv.slice(2);
+  const orgIdx = argv.indexOf('--org');
+  const orgOverride = orgIdx >= 0 ? argv.splice(orgIdx, 2)[1] : null;
+  const what = argv[0] || 'all';
   const config = loadConfig(process.env);
+  if (orgOverride) { config.books.orgId = String(orgOverride); console.log(`(read-only, organization ${orgOverride})`); }
   const logger = createLogger({ level: 'warn' });
   const tokenProvider = createTokenProvider(config.books);
   const books = createBooksClient({ config: { ...config.books, orgId: config.books.orgId || '0' }, tokenProvider, logger });
@@ -34,7 +42,25 @@ const { createBooksClient } = fn('books/client');
   if (!config.books.orgId) { console.log('\nSet BOOKS_ORG_ID in .env and run again.'); return; }
 
   // ---- raw-shape probes for Phase 2 (print the keys we have to map; values are the sandbox's own seed data)
-  const arg = process.argv[3];
+  const arg = argv[1];
+  if (what === 'find') {
+    const { candidatesFor } = fn('pipeline/resolvePo');
+    const cands = candidatesFor(arg, config.matching);
+    console.log(`\nCandidates for "${arg}": ${cands.join(' | ')}`);
+    for (const c of cands.filter((x) => !/\s/.test(x)).slice(0, 8)) {
+      const hits = await books.searchPurchaseOrders({ purchaseorder_number: c });
+      const exact = hits.find((p) => String(p.purchaseorder_number).toLowerCase() === c.toLowerCase());
+      if (exact) { console.log(`  purchaseorder_number = ${c} → ${exact.purchaseorder_number} (${exact.purchaseorder_id}) ${exact.vendor_name} total=${exact.total} status=${exact.status} ref="${exact.reference_number || ''}"`); return; }
+    }
+    for (const c of cands.slice(0, 8)) {
+      const hits = await books.searchPurchaseOrders({ reference_number: c });
+      const exact = hits.find((p) => String(p.reference_number || '').toLowerCase() === c.toLowerCase());
+      if (exact) { console.log(`  reference_number = ${c} → ${exact.purchaseorder_number} (${exact.purchaseorder_id}) ${exact.vendor_name} total=${exact.total} status=${exact.status}`); return; }
+      if (hits.length) console.log(`  reference_number ~ ${c}: ${hits.slice(0, 3).map((p) => `${p.purchaseorder_number} ref="${p.reference_number}"`).join(', ')}`);
+    }
+    console.log('  → not found by number or reference');
+    return;
+  }
   if (what === 'po') {
     const hits = await books.searchPurchaseOrders({ purchaseorder_number: arg });
     const hit = hits.find((p) => p.purchaseorder_number === arg) || hits[0];

@@ -70,19 +70,22 @@ REFERENCE:  118204
 - If the document shows a Total and a separate Amount Paid giving a Balance Due of 0.00, `gross` is the original Total, not 0.00.
 - `net` — goods/services total before VAT (Subtotal, Net Amount, Goods Value). Include carriage in `net` only if the document's own subtotal includes it.
 - `vat` — the VAT/tax amount.
-- `carriage` — delivery, shipping, freight, postage or packing charge as a separate figure if printed; otherwise `null`. If carriage appears as a line in the product table, also report it in `carriage` and set that line's `mpn` to `null` and `description` to the printed text.
+- `carriage` — the **sum** (net of VAT) of every delivery-type charge on the document: carriage, delivery, freight, shipping, postage, packing, handling, timed-delivery premiums ("PRE 10AM DELIVERY"), small-order / order surcharges, fuel surcharges. They may be printed as rows inside the product table (codes like `FREIGHT`, `SERVFC`, `CARRIAGE`, `del`, `P&P`) or under the totals as "Other charges". Several such rows → add them up. None → `null`. These rows are **never** `line_items`.
 - Numbers only: `£1,200.00` → `1200.00`; `GBP 75.19` → `75.19`.
 
 If a tax summary gives net, VAT and gross, use those three.
 
 ## 4. Line items
 One entry per product line in the goods table, in printed order.
-- `mpn` — the supplier's product / part / item code for that line (labels: Code, Item Code, Product Code, Part No, Ref, SKU, Article). `null` if the line has no code.
+- `mpn` — the **supplier's own** product / part / item code for that line (labels: Code, Item Code, Item Number, Product Code, Part No, Ref, SKU, Article, Item No.). Rules:
+  - Two codes on one line (e.g. `Item Number` plus a second row `UPC/Customer Item`, or `Item No. / Customer Item No.`): take the supplier's item number — the one in the Item Number column / printed first — never the customer's own item code and never a 13-digit barcode (EAN/UPC).
+  - Code embedded at the start of the description (`T7-5L THINNERS/CLEANER NO.7`, `SLA-GRE-3-6 - Slate Grey 3-6mm`, `CX402310771 THERMOGUARD 5200`): split it — the code is `mpn`, the remainder is `description`.
+  - Copy the code exactly as printed (dots, dashes, letters, case). `null` only if the line truly has no code.
 - `description` — the printed description.
 - `quantity` — the invoiced quantity (number). If the table shows ordered and delivered/invoiced quantities, use the invoiced/delivered one.
 - `unit_price` — net unit price before VAT.
 - `line_total` — the line's net total.
-Exclude carriage, packing, discounts and VAT rows from `line_items` (carriage goes to `totals.carriage`). If the document has no product table, return an empty array.
+Exclude carriage / freight / delivery / surcharge rows, discounts and VAT rows from `line_items` (they go to `totals.carriage`, see §3). Keep back-ordered or zero-quantity lines out as well (quantity 0 or "to follow"). If the document has no product table, return an empty array.
 
 ## 5. Date
 `invoice_date` from Invoice Date, Date, Tax Point, Taxpoint Date, Document Date. Convert UK formats to ISO: `13/01/2026` → `2026-01-13`, `14.01.2026` → `2026-01-14`, `06/01/26` → `2026-01-06`. Due dates are not invoice dates.
@@ -144,6 +147,28 @@ Invoice 98402167   P.O.No.: IPO/316591   Date: 06-01-2026
 Net Amount 140.96   VAT 28.19   Gross Amount 169.15 GBP
 ```
 → invoice_number `98402167`, po_reference `IPO/316591`, invoice_date `2026-01-06`, totals {net 140.96, vat 28.19, carriage null, gross 169.15}, confidence 0.97.
+
+### Example F — two codes per line, freight inside the table, order surcharge under the totals
+```
+Invoice:9020417753   Billing Date: 01.10.2026   PO Number: PO-000482   Sales Order: 104772019
+P.O. Line  Item Number / UPC/Customer Item   Material Description          Units  Unit Price  Amount
+0001       MB7260031E1                       METALBRITE 500ML AGED COPPER  6      28.31       169.86
+           MTBMACOP500
+0002       31408.2                           GREY HC GRY                   4      44.74       178.96
+           ZHCGREY
+Subtotal 348.82 GBP   Other Charges/Discounts: Order Surcharge 10.46 GBP   VAT (20%) 71.86 GBP   Total 431.14 GBP
+```
+→ invoice_number `9020417753`, invoice_date `2026-10-01`, po_reference `PO-000482` (Sales Order 104772019 is the supplier's own order), line_items [{mpn `MB7260031E1`, description `METALBRITE 500ML AGED COPPER`, quantity 6, unit_price 28.31, line_total 169.86}, {mpn `31408.2`, description `GREY HC GRY`, quantity 4, unit_price 44.74, line_total 178.96}] (the second-row codes `MTBMACOP500` / `ZHCGREY` are the customer's item codes, not used), totals {net 348.82, vat 71.86, carriage 10.46, gross 431.14}, confidence 0.96.
+
+### Example G — freight as a coded row, code embedded in the description
+```
+YOUR ORDER REF IPO/352164      INVOICE NOTE NO 2611020458   INVOICE NOTE DATE 27/10/26
+ITEM  DESCRIPTION                                   QUANTITY  PRICE   VALUE    VAT VALUE  TOTAL
+1     T7-5L THINNERS/CLEANER NO.7 5 LITRES          3.00      6.78    101.70   20.34      122.04
+      SERVFC FREIGHT CHARGE                         1.00      75.00   75.00    15.00      90.00
+INVOICE TOTALS  GBP 176.70  35.34  212.04
+```
+→ invoice_number `2611020458`, invoice_date `2026-10-27`, po_reference `IPO/352164`, line_items [{mpn `T7-5L`, description `THINNERS/CLEANER NO.7 5 LITRES`, quantity 3, unit_price 6.78, line_total 101.70}], totals {net 176.70, vat 35.34, carriage 75.00, gross 212.04}, confidence 0.96.
 
 ### Example E — Zoho-style PO number
 ```
