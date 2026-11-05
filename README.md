@@ -88,11 +88,16 @@ npm run deploy        # generates functions/autoscan-run/catalyst-config.json fr
 
 All tunables are environment variables (`.env` locally, Catalyst env vars deployed — see `.env.example`). The ones finance will care about: `TOTAL_TOLERANCE` (GBP, default 1.00), `BILL_ADJUST_TO_INVOICE` (default true), `RETRY_AFTER_HOURS` (6) × `MAX_ATTEMPTS` (28), `MAX_NEW_PER_RUN` (40), `DRY_RUN`, `MAIL_TRANSPORT` (`log` | `smtp` | `catalyst`), `DAILY_REPORT_HOUR` (17, `off` to disable), `REPORT_PER_RUN` (false), `PO_PREFIX` / `PO_PAD_WIDTH` (the Books PO numbering, e.g. `PR-` / 5).
 
-## Backlog (agreed with the client, not started)
+## Waiting on the client (nothing to build until answered)
 
-- **Report mailbox**: the daily email is built and verified; it goes to the log until the client provides a mailbox (`MAIL_TRANSPORT=smtp`, one deploy).
-- **Price policy**: `LINE_PRICE_TOLERANCE_PCT` (5) and `ACCEPT_LOWER_PRICE` (true) are placeholders until the client confirms them — one env change, no code.
-- **Golden set**: real supplier invoices from the client through the sandbox before UAT.
+- **Price policy** (asked 5 Nov): bill automatically when a supplier invoices *below* the PO price? Per-line deviation accepted automatically (±5 %)? → `LINE_PRICE_TOLERANCE_PCT` (5) and `ACCEPT_LOWER_PRICE` (true) are placeholders; one env change, no code.
+- **Report mailbox**: the client is creating it → `MAIL_TRANSPORT=smtp` + app password, one deploy.
+- **Web-shop purchase orders** (clarification sent 5 Nov): do POs auto-created from the web shop exist, how are they recognised, and is their carriage the customer's delivery charge? If they exist under shared vendors, a PO-level `Ignore` override goes into `vendorRules.js`; otherwise the vendor-level rule covers it and nothing is built.
+- **UAT** with finance on the sandbox, then production promotion (`docs/catalyst-setup.md` §8).
+
+## Backlog
+
+- The historical PDF backlog in Books Documents (parked, later phase).
 
 ## Rules
 

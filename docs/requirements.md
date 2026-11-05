@@ -24,3 +24,9 @@ Additional rules from the project lead (4 Nov 2026):
 - UAT exit: the client (project coordinator + accountant) switches the old Deluge schedule off only after UAT with all findings resolved.
 - One **end-of-day** report email with bills created (links), amount mismatches and unmatched POs, as a clean HTML dashboard. **Done and verified on Catalyst** (`src/report/daily.js`); goes to the log until the client's mailbox exists.
 - Fixing a PO hours or days later must bill the document automatically without extra AI cost. Done (stored extraction, 6 h × 28).
+
+## Open questions (to the client, 5 Nov 2026)
+
+- Price policy: automatic bill at the invoice price when a line is invoiced below the PO price? Accepted per-line deviation (e.g. ±5 %)? Increases above the tolerance always go to review.
+- Web-shop purchase orders: do POs auto-created from web orders exist in Books, how can one be recognised (reference format / custom field / vendor / creating user), and is their carriage line the customer's delivery charge (never comparable to the supplier's) — should everything else match as usual?
+- Report mailbox: being created by the client.
