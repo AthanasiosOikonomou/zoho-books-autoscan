@@ -8,6 +8,9 @@
  *
  *   node scripts/books-probe.js            → everything below
  *   node scripts/books-probe.js orgs       → just list organizations
+ *   node scripts/books-probe.js po PO-00001 → one PO as the API returns it (line-item keys: sku? mpn? custom fields?)
+ *   node scripts/books-probe.js item <item_id> → one item as the API returns it (mpn / sku / custom_fields)
+ *   node scripts/books-probe.js vendor <contact_id> → one vendor (custom_fields → carriage rule / tolerance)
  */
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -29,6 +32,36 @@ const { createBooksClient } = fn('books/client');
   for (const o of orgs) console.log(`  ${o.organization_id}  ${o.name}  [${o.is_default_org ? 'default' : ''}${o.is_sandbox_org || /sandbox/i.test(o.name) ? ' SANDBOX?' : ''}]`);
   if (what === 'orgs') return;
   if (!config.books.orgId) { console.log('\nSet BOOKS_ORG_ID in .env and run again.'); return; }
+
+  // ---- raw-shape probes for Phase 2 (print the keys we have to map; values are the sandbox's own seed data)
+  const arg = process.argv[3];
+  if (what === 'po') {
+    const hits = await books.searchPurchaseOrders({ purchaseorder_number: arg });
+    const hit = hits.find((p) => p.purchaseorder_number === arg) || hits[0];
+    if (!hit) { console.log(`\nNo PO ${arg}`); return; }
+    const po = await books.getPurchaseOrder(hit.purchaseorder_id);
+    console.log(`\nPO ${po.purchaseorder_number} — top-level keys:\n  ${Object.keys(po).join(', ')}`);
+    const li = (po.line_items || [])[0] || {};
+    console.log(`\nFirst line item — keys:\n  ${Object.keys(li).join(', ')}`);
+    console.log(`\nFirst line item — values of interest:\n  ${JSON.stringify({ item_id: li.item_id, name: li.name, sku: li.sku, mpn: li.mpn, description: li.description, quantity: li.quantity, quantity_billed: li.quantity_billed, rate: li.rate, tax_id: li.tax_id, tax_percentage: li.tax_percentage, account_id: li.account_id, item_custom_fields: li.item_custom_fields, custom_fields: li.custom_fields }, null, 1)}`);
+    console.log(`\nPO custom_fields: ${JSON.stringify(po.custom_fields || [])}  shipping_charge=${po.shipping_charge}  adjustment=${po.adjustment}`);
+    return;
+  }
+  if (what === 'item') {
+    const json = await books.request(`/items/${arg}`);
+    const it = json.item || {};
+    console.log(`\nItem ${it.item_id} — keys:\n  ${Object.keys(it).join(', ')}`);
+    console.log(`\nValues of interest:\n  ${JSON.stringify({ name: it.name, sku: it.sku, mpn: it.mpn, upc: it.upc, ean: it.ean, isbn: it.isbn, part_number: it.part_number, vendor_id: it.vendor_id, purchase_rate: it.purchase_rate, purchase_account_id: it.purchase_account_id, custom_fields: it.custom_fields }, null, 1)}`);
+    return;
+  }
+  if (what === 'vendor') {
+    const json = await books.request(`/contacts/${arg}`);
+    const c = json.contact || {};
+    console.log(`\nVendor ${c.contact_id} ${c.contact_name} — keys:\n  ${Object.keys(c).join(', ')}`);
+    console.log(`\ncustom_fields: ${JSON.stringify(c.custom_fields || [], null, 1)}`);
+    for (const k of Object.keys(c)) if (k.startsWith('cf_')) console.log(`  ${k} = ${JSON.stringify(c[k])}`);
+    return;
+  }
 
   const terms = await books.getPaymentTerms();
   console.log(`\nPayment terms (${terms.length}):`);

@@ -13,3 +13,4 @@ seed/seed-output.json
 seed/invoices/
 functions/autoscan-run/catalyst-config.json
 catalyst.json.bak
+golden/
