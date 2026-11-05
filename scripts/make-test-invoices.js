@@ -75,11 +75,13 @@ function refFor(style, po) {
 }
 function expectedOutcome(inv, key) {
   if (inv.kind === 'credit_note') return inv.sameInvoiceNumberAs ? 'DUPLICATE (vendor credit exists)' : inv.againstInvoice ? 'CREDITED — vendor credit applied to the bill of invoice ' + inv.againstInvoice : 'CREDITED — vendor credit on the PO only, report says "not linked to any bill"';
-  if (key === 'rounding') return 'BILLED — bill total = invoice total (adjustment +0.42 vs the PO lines)';
-  if (key === 'mismatch' || key === 'carriage_zero') return 'TOTAL_MISMATCH (Phase 1) / CARRIAGE_MISMATCH (Phase 2)';
-  if (key === 'carriage_fixed' || key === 'carriage_ignore' || key === 'prestashop') return 'TOTAL_MISMATCH (Phase 1) → BILLED (Phase 2 with vendor rule)';
-  if (key === 'partial') return 'TOTAL_MISMATCH (Phase 1) → BILLED partial (Phase 2)';
-  if (key === 'overqty') return 'TOTAL_MISMATCH (Phase 1) / QTY_EXCEEDS (Phase 2)';
+  if (key === 'rounding') return 'BILLED — bill total = invoice total (Phase 1: adjustment +0.42; Phase 2: line at 11.25 within ±5%)';
+  if (key === 'mismatch') return 'TOTAL_MISMATCH (Phase 1) / PRICE_MISMATCH +11.8% (Phase 2)';
+  if (key === 'carriage_zero') return 'TOTAL_MISMATCH (Phase 1) / CARRIAGE_MISMATCH — vendor rule Zero (Phase 2)';
+  if (key === 'carriage_fixed') return 'TOTAL_MISMATCH (Phase 1) → BILLED with carriage 15.00 (Phase 2, Fixed ±5)';
+  if (key === 'carriage_ignore' || key === 'prestashop') return 'TOTAL_MISMATCH (Phase 1) → BILLED with the invoice carriage (Phase 2, Ignore)';
+  if (key === 'partial') return inv.suffix === 'A' ? 'TOTAL_MISMATCH (Phase 1) → BILLED partial 6 × primer (Phase 2)' : 'BILLED on remaining basis (Phase 1) / BILLED closing lines (Phase 2)';
+  if (key === 'overqty') return 'TOTAL_MISMATCH (Phase 1) / QTY_EXCEEDS 5 > 3 (Phase 2)';
   if (key === 'duplicate' && inv.sameInvoiceNumberAs) return 'DUPLICATE';
   if (key === 'nopo') return 'NO_PO_REF';
   return 'BILLED';

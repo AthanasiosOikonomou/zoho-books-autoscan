@@ -59,7 +59,7 @@ const POS = [
   { key: 'embedded', vendor: 'harlow', number: null, reference: 'IPO 317792', lines: [['roller', 20], ['tape', 5]], carriage: 8.5,
     invoices: [{ suffix: 'A', label: 'Legacy ref embedded in text', refStyle: 'embedded', lines: 'all', carriage: 8.5 }] },
   { key: 'mismatch', vendor: 'crown', number: null, reference: null, lines: [['primer5', 3], ['emul10', 2]], carriage: 12,
-    invoices: [{ suffix: 'A', label: 'Total mismatch (price +1.50 on a line)', refStyle: 'zoho', lines: 'all', carriage: 12, priceDelta: { primer5: 1.5 } }] },
+    invoices: [{ suffix: 'A', label: 'Price +4.00 on a line (+11.8%, over the ±5% line tolerance)', refStyle: 'zoho', lines: 'all', carriage: 12, priceDelta: { primer5: 4 } }] },
   { key: 'carriage_zero', vendor: 'rustoleum', number: null, reference: null, lines: [['combi1', 12]], carriage: 10,
     invoices: [{ suffix: 'A', label: 'Carriage differs, vendor rule Zero → exception', refStyle: 'zoho', lines: 'all', carriage: 12.5 }] },
   { key: 'carriage_fixed', vendor: 'crown', number: null, reference: null, lines: [['emul10', 4]], carriage: 12,
@@ -88,6 +88,20 @@ const POS = [
   { key: 'rounding', vendor: 'rustoleum', number: null, reference: null, lines: [['combi1', 7]], carriage: 0,
     invoices: [{ suffix: 'A', label: 'Unit price +0.05 → invoice 42p over the PO, inside the £1 tolerance → BILLED with the invoice total (bill adjustment)', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { combi1: 0.05 } }] },
 ];
+
+/** Build the custom_fields update for the labels whose value differs; report labels that do not exist on the entity. */
+function customFieldValues(existing, wanted) {
+  const changes = []; const missing = [];
+  const list = existing || [];
+  for (const [label, value] of Object.entries(wanted)) {
+    const f = list.find((x) => String(x.label || '').trim().toLowerCase() === label);
+    if (!f) { missing.push(label); continue; }
+    const want = value === null || value === undefined ? '' : String(value);
+    const have = f.value === null || f.value === undefined ? '' : String(f.value);
+    if (want !== have && !(f.data_type === 'decimal' && Number(want) === Number(have))) changes.push({ customfield_id: f.customfield_id || f.field_id, value: f.data_type === 'decimal' ? Number(want) : want });
+  }
+  return { changes, missing };
+}
 
 (async () => {
   const planOnly = process.argv.includes('--plan');
@@ -118,6 +132,14 @@ const POS = [
       c = (await books.request(`/contacts/${c.contact_id}`, { method: 'PUT', json: { payment_terms: v.terms, payment_terms_label: `Net ${v.terms}` } })).contact;
       console.log(`~ vendor ${v.name} terms Net ${v.terms}`);
     } else console.log(`= vendor ${v.name} (${c.contact_id})`);
+    // Phase 2: vendor custom fields "Carriage Rule" / "Carriage Tolerance" (created once in the UI; written here by label)
+    const full = (await books.request(`/contacts/${c.contact_id}`)).contact || c;
+    const cfUpdates = customFieldValues(full.custom_fields, { 'carriage rule': v.carriageRule, 'carriage tolerance': v.carriageTolerance });
+    if (cfUpdates.missing.length) console.log(`! vendor custom field(s) not found: ${cfUpdates.missing.join(', ')} — create them in the UI (Settings → Preferences → Vendors → Custom Fields): "Carriage Rule" dropdown Zero/Fixed/Ignore, "Carriage Tolerance" decimal`);
+    if (cfUpdates.changes.length) {
+      await books.request(`/contacts/${c.contact_id}`, { method: 'PUT', json: { custom_fields: cfUpdates.changes } });
+      console.log(`  ~ ${v.name}: carriage ${v.carriageRule}${v.carriageRule === 'Fixed' ? ` ±${v.carriageTolerance}` : ''}`);
+    }
     out.vendors[v.key] = { contact_id: c.contact_id, name: v.name, terms: v.terms, carriageRule: v.carriageRule, carriageTolerance: v.carriageTolerance };
   }
 
@@ -129,6 +151,11 @@ const POS = [
       i = (await books.request('/items', { method: 'POST', json: { name: it.name, sku: it.sku, rate: it.rate, purchase_rate: it.rate, product_type: 'goods', item_type: 'sales_and_purchases', purchase_description: it.name } })).item;
       console.log(`+ item ${it.name} (${i.item_id})`);
     } else console.log(`= item ${it.name} (${i.item_id})`);
+    // Phase 2: item custom field "Supplier Reference" (production prints it on PO lines; mirrored here) = the supplier's code
+    const fullItem = (await books.request(`/items/${i.item_id}`)).item || i;
+    const cfu = customFieldValues(fullItem.custom_fields, { 'supplier reference': it.mpn });
+    if (cfu.missing.length && it === ITEMS[0]) console.log(`! item custom field "Supplier Reference" not found — create it in the UI (Settings → Preferences → Items → Custom Fields, type Text, show on PDF) and re-run`);
+    if (cfu.changes.length) { await books.request(`/items/${i.item_id}`, { method: 'PUT', json: { custom_fields: cfu.changes } }); console.log(`  ~ ${it.name}: Supplier Reference ${it.mpn}`); }
     out.items[it.key] = { item_id: i.item_id, name: it.name, sku: it.sku, mpn: it.mpn, rate: it.rate };
   }
 
@@ -236,5 +263,5 @@ const POS = [
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'seed-output.json'), JSON.stringify(out, null, 2));
   console.log(`\nWrote seed/seed-output.json — next: node scripts/make-test-invoices.js\nBooks calls used: ${books.stats.calls}`);
-  console.log('\nManual step (UI, once): Vendor custom fields "Carriage Rule" (dropdown Zero/Fixed/Ignore) and "Carriage Tolerance" (decimal), then set per vendor as in seed-output.json.');
+  console.log('\nPhase 2 fields written where they exist: vendor "Carriage Rule"/"Carriage Tolerance", item "Supplier Reference" (see any "!" lines above for the ones to create in the UI).');
 })().catch((err) => { console.error(err.message); process.exit(1); });

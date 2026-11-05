@@ -12,6 +12,8 @@ Every 30 minutes a Catalyst Job function reads the Zoho Books **Documents inbox*
 
 Exceptions are **reconciled automatically**: a document whose PO was missing or wrong is re-checked every 6 h for a week (28 attempts) using the stored extraction — no second AI call — so fixing the PO hours or days later bills it without anyone touching the inbox. Service errors (AI, Books, attachment) retry on the next run. Duplicate supplier invoice numbers are never billed twice; a PO can receive several bills (partial deliveries).
 
+**Phase 2 (`PHASE2_ENABLED=true`) matches line by line.** Each invoice line is matched to a PO line by the supplier's code — the item custom field *Supplier Reference* printed on the PO, the item MPN, or the SKU — compared normalised (`ZK410-KIT` = `ZK410KIT`). Quantity must not exceed what is still un-billed on that PO line (partial deliveries bill only what was shipped; the rest waits for the next invoice), the unit price must be within `LINE_PRICE_TOLERANCE_PCT` (a lower price is accepted and billed as invoiced when `ACCEPT_LOWER_PRICE`), and carriage is checked under the **vendor's rule** — `Carriage Rule` Zero / Fixed (± `Carriage Tolerance`) / Ignore, two custom fields finance maintains on the vendor; default Zero. The bill then carries exactly the invoice: invoiced quantities, invoice prices, invoice carriage. A PO whose lines carry no code at all falls back to the total match and the report says so (`NO_MPN`).
+
 **Credit notes** become Books **vendor credits**: lines mapped to the PO's lines by MPN, the credit applied to the bill it refers to (by the invoice number printed on it, or the PO's only bill), otherwise left against the PO and reported as *not linked to any bill*. Same credit-note number twice → duplicate.
 
 **Reporting**: every run writes its report to the function log; finance gets **one email per day** — an HTML dashboard with bills created (links into Books), vendor credits, everything still waiting for a human grouped by reason with the action to take and how long it has been waiting, duplicates, and the day's API/AI cost. Sent by the first run after `DAILY_REPORT_HOUR`, or on demand (`docs/catalyst-setup.md` §7b).
@@ -29,6 +31,7 @@ Exceptions are **reconciled automatically**: a document whose PO was missing or 
 | `functions/autoscan-run/test/` | `node --test` unit + fake-backed pipeline tests |
 | `scripts/` | `books-token.js`, `books-probe.js`, `seed-sandbox.js`, `make-test-invoices.js`, `local-run.js` |
 | `docs/` | Architecture, decisions, client requirements, Catalyst setup |
+| `functions/autoscan-run/src/pipeline/lines.js`, `vendorRules.js` | Phase 2 line matcher and the vendor carriage rule reader |
 
 ## Setup (sandbox)
 
@@ -75,6 +78,8 @@ npm run deploy        # generates functions/autoscan-run/catalyst-config.json fr
 | `PO_NOT_FOUND` / `NO_PO_REF` | PO reference not in Books / not readable on the document | every 6 h |
 | `BILL_TEMPLATE_MISMATCH` | Books would bill a different figure from the PO's remaining quantities | every 6 h |
 | `LOW_CONFIDENCE` | The reader was unsure; values shown for review | every 6 h |
+| `LINE_UNMATCHED` / `QTY_EXCEEDS` / `PRICE_MISMATCH` / `CARRIAGE_MISMATCH` | Phase 2: invoice line not on the PO / more than remaining / price outside tolerance / carriage outside the vendor rule | every 6 h |
+| `NO_MPN` | Phase 2 could not use the PO lines (no Supplier Reference / MPN / SKU) — matched on totals instead | — (note) |
 | `CREDIT_NOTE` / `CREDIT_TOTAL_MISMATCH` | Credit note unreadable / Books priced the credit differently from the printed total (draft removed) | no / every 6 h |
 | `NOT_AN_INVOICE` / `UNSUPPORTED_FILE` / `PAGE_LIMIT` | Statement, delivery note, non-PDF, catalogue… | no |
 | `AI_ERROR` / `BOOKS_ERROR` / `ATTACH_FAILED` | Service error | next run |
@@ -86,7 +91,7 @@ All tunables are environment variables (`.env` locally, Catalyst env vars deploy
 ## Backlog (agreed with the client, not started)
 
 - **Report mailbox**: the daily email is built and verified; it goes to the log until the client provides a mailbox (`MAIL_TRANSPORT=smtp`, one deploy).
-- **Phase 2**: vendor carriage rules, line-level matching by MPN, partial bills from invoiced quantities (seed scenarios already exist, `PHASE2_ENABLED=false`).
+- **Phase 2 sandbox verification**: implemented and unit-tested; run the seed scenarios with `PHASE2_ENABLED=true` and confirm the price tolerance / lower-price policy with the client.
 - **Golden set**: real supplier invoices from the client through the sandbox before UAT.
 
 ## Rules
