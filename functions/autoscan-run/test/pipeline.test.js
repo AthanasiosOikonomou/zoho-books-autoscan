@@ -303,7 +303,7 @@ test('phase 2: partial delivery billed at the invoice prices with only the invoi
   assert.equal(r.results[0].status, STATUS.BILLED, JSON.stringify(r.results[0].reason_text));
   const bill = books.state.created[0];
   assert.deepEqual(bill.payload.line_items.map((l) => [l.purchaseorder_item_id, l.quantity, l.rate]), [['p', 6, 33.5]], 'only the invoiced line, at the invoice price');
-  assert.equal(bill.total, r2(6 * 33.5 * 1.2)); assert.equal(r.results[0].note, undefined, 'within tolerance → no note');
+  assert.equal(bill.total, r2(6 * 33.5 * 1.2)); assert.match(r.results[0].note, /-1\.5%, billed at the invoice price/, 'lower within tolerance → billed at the invoice price, noted');
   assert.equal(r.results[0].lines.partial, true); assert.equal(r.results[0].match.basis, 'lines');
   // closing invoice: Books now says 4 remaining on p (fake template subtracts quantity_billed)
   pos2[0].line_items[0].quantity_billed = 6;
@@ -335,14 +335,20 @@ test('phase 2: carriage — Zero flags, Fixed within tolerance bills the invoice
   assert.deepEqual([extra.item_id, extra.quantity, extra.rate, extra.tax_id], ['it-carr', 1, 12.5, 't20']);
   assert.equal(nBooks.state.created[0].total, r2((134.4 + 12.5) * 1.2), 'bill total = invoice total');
 });
-test('phase 2: price above tolerance → PRICE_MISMATCH; lower beyond tolerance → BILLED at the invoice price with a note; keyless PO → Phase 1 totals', async () => {
+test('phase 2: any price increase → PRICE_MISMATCH; up to 5% lower → BILLED at the invoice price with a note; further below → PRICE_MISMATCH; keyless PO → Phase 1 totals', async () => {
   const pos2 = [{ purchaseorder_id: 'po7', purchaseorder_number: 'PO-00070', vendor_id: 'v1', vendor_name: 'Vendor', total: r2(3 * 34 * 1.2), payment_terms: 30, line_items: [poLine('p', 'CP-PR5', 3, 34)] }];
   const books = fakeBooks({ docs: [{ document_id: 'hi', file_name: 'hi.pdf', transactions: [] }], pos: pos2 }); books.state.contacts.v1 = vendorCf('Zero', 0); books.state.taxOnBills = true;
   const hi = await runAutoscan({ config: cfg(P2), books: books.api, extractor: p2Extractor({ hi: { po_reference: 'PO-00070', lines: [{ mpn: 'CP-PR5', quantity: 3, unit_price: 38 }] } }), store: new JsonFileStore(), mailer: mailer(), logger });
   assert.equal(hi.results[0].reason_code, 'PRICE_MISMATCH'); assert.equal(books.state.created.length, 0);
   const books2 = fakeBooks({ docs: [{ document_id: 'lo', file_name: 'lo.pdf', transactions: [] }], pos: pos2 }); books2.state.contacts.v1 = vendorCf('Zero', 0); books2.state.taxOnBills = true;
-  const lo = await runAutoscan({ config: cfg(P2), books: books2.api, extractor: p2Extractor({ lo: { po_reference: 'PO-00070', lines: [{ mpn: 'CP-PR5', quantity: 3, unit_price: 25 }] } }), store: new JsonFileStore(), mailer: mailer(), logger });
-  assert.equal(lo.results[0].status, STATUS.BILLED); assert.match(lo.results[0].note, /lower, accepted/); assert.equal(books2.state.created[0].payload.line_items[0].rate, 25);
+  const lo = await runAutoscan({ config: cfg(P2), books: books2.api, extractor: p2Extractor({ lo: { po_reference: 'PO-00070', lines: [{ mpn: 'CP-PR5', quantity: 3, unit_price: 33 }] } }), store: new JsonFileStore(), mailer: mailer(), logger }); // −2.9%
+  assert.equal(lo.results[0].status, STATUS.BILLED, lo.results[0].reason_text); assert.match(lo.results[0].note, /-2\.9%, billed at the invoice price/); assert.equal(books2.state.created[0].payload.line_items[0].rate, 33);
+  const books4 = fakeBooks({ docs: [{ document_id: 'vl', file_name: 'vl.pdf', transactions: [] }], pos: pos2 }); books4.state.contacts.v1 = vendorCf('Zero', 0); books4.state.taxOnBills = true;
+  const vl = await runAutoscan({ config: cfg(P2), books: books4.api, extractor: p2Extractor({ vl: { po_reference: 'PO-00070', lines: [{ mpn: 'CP-PR5', quantity: 3, unit_price: 25 }] } }), store: new JsonFileStore(), mailer: mailer(), logger }); // −26%
+  assert.equal(vl.results[0].reason_code, 'PRICE_MISMATCH'); assert.match(vl.results[0].reason_text, /allowed down to -5%/); assert.equal(books4.state.created.length, 0);
+  const books5 = fakeBooks({ docs: [{ document_id: 'sm', file_name: 'sm.pdf', transactions: [] }], pos: pos2 }); books5.state.contacts.v1 = vendorCf('Zero', 0); books5.state.taxOnBills = true;
+  const sm = await runAutoscan({ config: cfg(P2), books: books5.api, extractor: p2Extractor({ sm: { po_reference: 'PO-00070', lines: [{ mpn: 'CP-PR5', quantity: 3, unit_price: 34.5 }] } }), store: new JsonFileStore(), mailer: mailer(), logger }); // +1.5%
+  assert.equal(sm.results[0].reason_code, 'PRICE_MISMATCH'); assert.match(sm.results[0].reason_text, /price increases always go to review/); assert.equal(books5.state.created.length, 0);
   const posK = [{ purchaseorder_id: 'po8', purchaseorder_number: 'PO-00080', vendor_id: 'v1', vendor_name: 'Vendor', total: 120, payment_terms: 30, line_items: [poLine('k', null, 4, 25)] }];
   const books3 = fakeBooks({ docs: [{ document_id: 'kl', file_name: 'kl.pdf', transactions: [] }], pos: posK }); books3.state.contacts.v1 = vendorCf('Zero', 0); books3.state.taxOnBills = true;
   const kl = await runAutoscan({ config: cfg(P2), books: books3.api, extractor: p2Extractor({ kl: { po_reference: 'PO-00080', lines: [{ mpn: 'ZZ-1', quantity: 4, unit_price: 25 }] } }), store: new JsonFileStore(), mailer: mailer(), logger });

@@ -14,7 +14,7 @@ What the client's finance lead confirmed in writing, and where each point stands
 | 8 | **Carriage variance**: configurable per supplier — zero tolerance / absolute £ tolerance per supplier / excluded from matching (PO carriage often bears little relation to the invoiced amount, e.g. £15 on £150) | **Built** — vendor custom fields *Carriage Rule* (Zero/Fixed/Ignore) / *Carriage Tolerance*, read by label; default Zero (client); the bill carries the invoiced carriage | `vendorRules.js`, `lines.js` |
 | 9 | **Partial invoicing**: suppliers ship and invoice part of an order; today invoices are held until the order completes → line-level matching on **MPN**, one PO satisfied across several invoices | **Built** — invoiced quantities only, ≤ remaining per PO line, at invoice prices; Books tracks what is still open | `lines.js`, `bill.js` (`quantities`, `rates`) |
 
-Open with the client (5 Nov 2026): the per-line price tolerance (`LINE_PRICE_TOLERANCE_PCT`, default ±5%) and whether a price below the PO is accepted automatically (`ACCEPT_LOWER_PRICE`, default yes) — a real invoice showed every line ~3% below the PO plus a 3% order surcharge.
+Price policy (client, 6 Nov 2026): a line invoiced **below** the PO price by up to 5 % (`LINE_PRICE_TOLERANCE_PCT`) is billed at the invoice price and noted in the report; further below, or **any** price above the PO (`LINE_PRICE_TOLERANCE_UP_PCT` = 0), goes to review as `PRICE_MISMATCH`. `LINE_PRICE_TOLERANCE_ABS` (1p) only absorbs rounding.
 
 Additional rules from the project lead (4 Nov 2026):
 
@@ -25,8 +25,8 @@ Additional rules from the project lead (4 Nov 2026):
 - One **end-of-day** report email with bills created (links), amount mismatches and unmatched POs, as a clean HTML dashboard. **Done and verified on Catalyst** (`src/report/daily.js`); goes to the log until the client's mailbox exists.
 - Fixing a PO hours or days later must bill the document automatically without extra AI cost. Done (stored extraction, 6 h × 28).
 
-## Open questions (to the client, 5 Nov 2026)
+## Client answers (6 Nov 2026)
 
-- Price policy: automatic bill at the invoice price when a line is invoiced below the PO price? Accepted per-line deviation (e.g. ±5 %)? Increases above the tolerance always go to review.
-- Web-shop purchase orders: do POs auto-created from web orders exist in Books, how can one be recognised (reference format / custom field / vendor / creating user), and is their carriage line the customer's delivery charge (never comparable to the supplier's) — should everything else match as usual?
-- Report mailbox: being created by the client.
+- Price policy: 5 % tolerance **only for lines invoiced below the PO price**, never above; within the tolerance the bill is created at the supplier invoice price. Implemented as the defaults above.
+- Web-shop (PrestaShop) purchase orders: treated exactly like purchase orders raised by the team — same £1 total tolerance, same line matching, carriage by the vendor's rule. No PO-level override.
+- Report mailbox: still being created by the client.

@@ -59,9 +59,9 @@ function remainingQty(line) {
  */
 function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Zero', tolerance: 0 }, config }) {
   const cfg = {
-    pricePct: Number(config.linePriceTolerancePct ?? 5),
-    priceAbs: Number(config.linePriceToleranceAbs ?? 0.05),
-    acceptLower: config.acceptLowerPrice !== false,
+    pricePctDown: Number(config.linePriceTolerancePct ?? 5), // invoice below the PO price: billed at the invoice price up to this %
+    pricePctUp: Number(config.linePriceToleranceUpPct ?? 0), // invoice above the PO price: 0 = every increase goes to review
+    priceAbs: Number(config.linePriceToleranceAbs ?? 0.01), // penny rounding guard
     totalTolerance: Number(config.totalTolerance ?? 1),
     carriageItemId: config.carriageItemId || null,
     supplierRefLabel: config.supplierRefLabel || 'Supplier Reference',
@@ -108,10 +108,18 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
     let priceOk = true; let priceNote = null;
     if (Number.isFinite(rate) && Number.isFinite(poRate) && poRate > 0) {
       const d = round2(rate - poRate);
-      const tol = Math.max(cfg.priceAbs, round2(poRate * cfg.pricePct / 100));
-      if (Math.abs(d) > tol) {
-        if (d < 0 && cfg.acceptLower) priceNote = `${inv.mpn || hit.name}: invoiced at ${rate.toFixed(2)} vs PO ${poRate.toFixed(2)} (lower, accepted)`;
-        else { priceOk = false; problems.push({ code: 'PRICE_MISMATCH', text: `${inv.mpn || hit.name}: unit price ${rate.toFixed(2)} vs PO ${poRate.toFixed(2)} (${d > 0 ? '+' : ''}${(d / poRate * 100).toFixed(1)}%, tolerance ±${cfg.pricePct}%)` }); }
+      const pct = `${d > 0 ? '+' : ''}${(d / poRate * 100).toFixed(1)}%`;
+      const tolDown = Math.max(cfg.priceAbs, round2(poRate * cfg.pricePctDown / 100));
+      const tolUp = Math.max(cfg.priceAbs, round2(poRate * cfg.pricePctUp / 100));
+      const label = inv.mpn || hit.name;
+      if (d > tolUp) {
+        priceOk = false;
+        problems.push({ code: 'PRICE_MISMATCH', text: `${label}: unit price ${rate.toFixed(2)} vs PO ${poRate.toFixed(2)} (${pct}; ${cfg.pricePctUp > 0 ? `allowed up to +${cfg.pricePctUp}%` : 'price increases always go to review'})` });
+      } else if (-d > tolDown) {
+        priceOk = false;
+        problems.push({ code: 'PRICE_MISMATCH', text: `${label}: unit price ${rate.toFixed(2)} vs PO ${poRate.toFixed(2)} (${pct}; allowed down to -${cfg.pricePctDown}%)` });
+      } else if (Math.abs(d) > cfg.priceAbs + 1e-9) {
+        priceNote = `${label}: invoiced at ${rate.toFixed(2)} vs PO ${poRate.toFixed(2)} (${pct}, billed at the invoice price)`;
       }
     }
     if (priceNote) notes.push(priceNote);

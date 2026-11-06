@@ -59,7 +59,7 @@ const POS = [
   { key: 'embedded', vendor: 'harlow', number: null, reference: 'IPO 317792', lines: [['roller', 20], ['tape', 5]], carriage: 8.5,
     invoices: [{ suffix: 'A', label: 'Legacy ref embedded in text', refStyle: 'embedded', lines: 'all', carriage: 8.5 }] },
   { key: 'mismatch', vendor: 'crown', number: null, reference: null, lines: [['primer5', 3], ['emul10', 2]], carriage: 12,
-    invoices: [{ suffix: 'A', label: 'Price +4.00 on a line (+11.8%, over the ±5% line tolerance)', refStyle: 'zoho', lines: 'all', carriage: 12, priceDelta: { primer5: 4 } }] },
+    invoices: [{ suffix: 'A', label: 'Price +4.00 on a line (+11.8%) → any increase goes to review', refStyle: 'zoho', lines: 'all', carriage: 12, priceDelta: { primer5: 4 } }] },
   { key: 'carriage_zero', vendor: 'rustoleum', number: null, reference: null, lines: [['combi1', 12]], carriage: 10,
     invoices: [{ suffix: 'A', label: 'Carriage differs, vendor rule Zero → exception', refStyle: 'zoho', lines: 'all', carriage: 12.5 }] },
   { key: 'carriage_fixed', vendor: 'crown', number: null, reference: null, lines: [['emul10', 4]], carriage: 12,
@@ -86,7 +86,14 @@ const POS = [
   { key: 'terms', vendor: 'harlow', number: null, reference: null, lines: [['roller', 3]], carriage: 0,
     invoices: [{ suffix: 'A', label: 'Exact match; bill must inherit the PO payment terms (Net 60)', refStyle: 'zoho', lines: 'all', carriage: 0 }] },
   { key: 'rounding', vendor: 'rustoleum', number: null, reference: null, lines: [['combi1', 7]], carriage: 0,
-    invoices: [{ suffix: 'A', label: 'Unit price +0.05 → invoice 42p over the PO, inside the £1 tolerance → BILLED with the invoice total (bill adjustment)', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { combi1: 0.05 } }] },
+    invoices: [{ suffix: 'A', label: 'Unit price +0.05 → invoice 42p over the PO, inside the £1 tolerance → BILLED with the invoice total (Phase 1 adjustment); Phase 2: +0.4% increase → review', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { combi1: 0.05 } }] },
+  // --- price policy (client, 6 Nov 2026): up to 5% below the PO price → bill at the invoice price; any increase → review
+  { key: 'price_lower', vendor: 'rustoleum', number: null, reference: null, lines: [['emul10', 4]], carriage: 0,
+    invoices: [{ suffix: 'A', label: 'Unit price −1.45 (−3.0%) → BILLED at the invoice price, noted in the report', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { emul10: -1.45 } }] },
+  { key: 'price_lower_far', vendor: 'rustoleum', number: null, reference: null, lines: [['primer5', 3]], carriage: 0,
+    invoices: [{ suffix: 'A', label: 'Unit price −3.40 (−10.0%) → PRICE_MISMATCH (allowed down to −5%)', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { primer5: -3.4 } }] },
+  { key: 'price_higher', vendor: 'rustoleum', number: null, reference: null, lines: [['combi1', 5]], carriage: 0,
+    invoices: [{ suffix: 'A', label: 'Unit price +0.40 (+3.6%) → PRICE_MISMATCH (increases always go to review)', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { combi1: 0.4 } }] },
 ];
 
 /**

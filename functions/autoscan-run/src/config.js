@@ -62,9 +62,11 @@ function loadConfig(env = process.env) {
       compareAgainstRemaining: bool(env.MATCH_AGAINST_REMAINING, true),
       phase2Enabled: bool(env.PHASE2_ENABLED, false),
       // --- Phase 2: line-level matching
-      linePriceTolerancePct: num(env.LINE_PRICE_TOLERANCE_PCT, 5), // per line, ± % of the PO unit price (client to confirm)
-      linePriceToleranceAbs: num(env.LINE_PRICE_TOLERANCE_ABS, 0.05), // GBP floor for cheap items
-      acceptLowerPrice: bool(env.ACCEPT_LOWER_PRICE, true), // invoice below PO beyond the tolerance → bill at the invoice price, noted (client to confirm)
+      // Client rule (6 Nov 2026): a unit price BELOW the PO by up to 5% is billed at the invoice price; any price ABOVE the
+      // PO goes to review. Both limits are per line, as % of the PO unit price; the GBP floor only absorbs penny rounding.
+      linePriceTolerancePct: num(env.LINE_PRICE_TOLERANCE_PCT, 5), // allowed % below the PO unit price
+      linePriceToleranceUpPct: num(env.LINE_PRICE_TOLERANCE_UP_PCT, 0), // allowed % above the PO unit price (0 = any increase → review)
+      linePriceToleranceAbs: num(env.LINE_PRICE_TOLERANCE_ABS, 0.01), // GBP rounding guard, both directions
       supplierRefLabel: env.SUPPLIER_REF_LABEL || 'Supplier Reference', // item custom field printed on the PO
       carriageItemId: env.CARRIAGE_ITEM_ID || '', // Books item used for carriage on bills when the PO has no carriage line (else: first line's account)
       carriageRuleLabel: env.CARRIAGE_RULE_LABEL || 'Carriage Rule', // vendor custom fields

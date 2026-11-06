@@ -51,17 +51,23 @@ test('partial delivery: 6 of 10 → ok and partial; the closing 4 after 6 billed
   const c = matchLines({ extraction: inv([{ mpn: 'CP-EM10M', quantity: 5, unit_price: 48.75 }]), po: { line_items: [poLine('e', 'CP-EM10M', 3, 48.75)] }, vendorRule: ZERO, config: cfg() });
   assert.equal(c.ok, false); assert.equal(c.reason.code, 'QTY_EXCEEDS'); assert.match(c.reason.text, /invoiced 5 but only 3 remaining/);
 });
-test('prices: within ±5% → billed at the invoice price; lower beyond → accepted with a note (ACCEPT_LOWER_PRICE); higher beyond → PRICE_MISMATCH; ACCEPT_LOWER_PRICE=false rejects', () => {
+test('prices (client rule 6 Nov 2026): up to 5% below the PO → billed at the invoice price with a note; further below → PRICE_MISMATCH; any increase → PRICE_MISMATCH; penny rounding ignored', () => {
   const po = { line_items: [poLine('a', 'MB7260031E1', 6, 29.16)] };
   const ok = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 28.31 }]), po, vendorRule: ZERO, config: cfg() }); // −2.9%
-  assert.equal(ok.ok, true); assert.equal(ok.rates.a, 28.31); assert.equal(ok.notes.length, 0);
-  const low = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 19.5 }]), po, vendorRule: ZERO, config: cfg() }); // −33%
-  assert.equal(low.ok, true); assert.equal(low.rates.a, 19.5); assert.match(low.notes[0], /lower, accepted/);
-  const high = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 31.5 }]), po, vendorRule: ZERO, config: cfg() }); // +8%
-  assert.equal(high.ok, false); assert.equal(high.reason.code, 'PRICE_MISMATCH'); assert.match(high.reason.text, /\+8\.0%/);
-  const strict = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 19.5 }]), po, vendorRule: ZERO, config: cfg({ ACCEPT_LOWER_PRICE: 'false' }) });
-  assert.equal(strict.ok, false); assert.equal(strict.reason.code, 'PRICE_MISMATCH');
-  const tight = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 29.9 }]), po, vendorRule: ZERO, config: cfg({ LINE_PRICE_TOLERANCE_PCT: '1' }) }); // +2.5% > 1%
+  assert.equal(ok.ok, true); assert.equal(ok.rates.a, 28.31); assert.match(ok.notes[0], /-2\.9%, billed at the invoice price/);
+  const edge = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 27.71 }]), po, vendorRule: ZERO, config: cfg() }); // −4.97%
+  assert.equal(edge.ok, true); assert.equal(edge.rates.a, 27.71);
+  const low = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 27.5 }]), po, vendorRule: ZERO, config: cfg() }); // −5.7%
+  assert.equal(low.ok, false); assert.equal(low.reason.code, 'PRICE_MISMATCH'); assert.match(low.reason.text, /-5\.7%; allowed down to -5%/);
+  const up = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 29.5 }]), po, vendorRule: ZERO, config: cfg() }); // +1.2%
+  assert.equal(up.ok, false); assert.equal(up.reason.code, 'PRICE_MISMATCH'); assert.match(up.reason.text, /\+1\.2%; price increases always go to review/);
+  const penny = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 29.17 }]), po, vendorRule: ZERO, config: cfg() }); // +1p rounding
+  assert.equal(penny.ok, true); assert.equal(penny.rates.a, 29.17); assert.equal(penny.notes.length, 0);
+  const exact = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 29.16 }]), po, vendorRule: ZERO, config: cfg() });
+  assert.equal(exact.ok, true); assert.equal(exact.notes.length, 0);
+  const upAllowed = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 29.5 }]), po, vendorRule: ZERO, config: cfg({ LINE_PRICE_TOLERANCE_UP_PCT: '2' }) }); // +1.2% ≤ 2%
+  assert.equal(upAllowed.ok, true); assert.equal(upAllowed.rates.a, 29.5); assert.match(upAllowed.notes[0], /\+1\.2%, billed at the invoice price/);
+  const tight = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 28.31 }]), po, vendorRule: ZERO, config: cfg({ LINE_PRICE_TOLERANCE_PCT: '1' }) }); // −2.9% > 1%
   assert.equal(tight.reason.code, 'PRICE_MISMATCH');
 });
 test('carriage per vendor rule: Zero rejects any variance, Fixed ±tolerance, Ignore never; carriage billed at the invoice amount', () => {
