@@ -2,9 +2,9 @@
 
 Zoho Books supplier-invoice → bill automation, running on **Zoho Catalyst** (EU DC, the client's account) with **Claude** for document reading. Replaces a previous Deluge scheduled function.
 
-> Status (5 Nov 2026): **Phase 1 and Phase 2 deployed and proven** on the client's Catalyst project (Development env) against the Books sandbox — scan → read → match → bill (at the invoice total) → report, automatic reconciliation, de-duplication, **credit notes → vendor credits** (applied to the bill, PDF attached), the **once-a-day HTML digest**, and **line-by-line matching** (Supplier Reference / MPN / SKU, partial deliveries, vendor carriage rules) — all verified live. The 13-document golden set of real supplier invoices reads correctly. The digest goes to the function log until the client provides a mailbox. Production stays in **dry-run** until UAT sign-off.
+> Status (5 Nov 2026): **Phase 1 and Phase 2 deployed and proven** on the client's Catalyst project (Development env) against the Books sandbox — scan → read → match → bill (at the invoice total) → report, automatic reconciliation, de-duplication, **credit notes → vendor credits** (applied to the bill, PDF attached), the **once-a-day HTML digest**, and **line-by-line matching** (Supplier Reference / MPN / SKU, partial deliveries, vendor carriage rules) — all verified live. The 13-document golden set of real supplier invoices reads correctly. The digest is emailed from the client's own mailbox (SMTP). Production stays in **dry-run** until UAT sign-off.
 
-**Next:** report mailbox → UAT with finance → production promotion.
+**Next:** UAT with finance → production promotion.
 
 ## What it does
 
@@ -90,7 +90,6 @@ All tunables are environment variables (`.env` locally, Catalyst env vars deploy
 
 ## Waiting on the client
 
-- **Report mailbox**: the client is creating it → `MAIL_TRANSPORT=smtp` + app password, one deploy.
 - **UAT** with finance on the sandbox, then production promotion (`docs/catalyst-setup.md` §8).
 
 Answered 6 Nov: price policy = up to 5 % below the PO price billed at the invoice price, any increase to review (env defaults); purchase orders created by the web shop are treated exactly like any other PO (no PO-level carriage override — the vendor-level rule applies).

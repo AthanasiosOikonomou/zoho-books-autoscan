@@ -26,3 +26,4 @@
 | 2026-11-06 | Purchase orders created by the web shop get no special carriage handling | Client decision 6 Nov 2026: all POs treated the same; the vendor-level carriage rule is the only rule |
 | 2026-11-06 | `SCAN_SINCE`: inbox documents created before the configured date are never read, recorded or reported; an unparsable creation time is treated as old (skipped, warned) | Client: the historical backlog (~7k files) must not be touched; without a cutoff the first production run would start on the oldest documents |
 | 2026-11-06 | No MPN readiness list; handover documentation after UAT | Client: they know which items lack codes and update them themselves; UAT may change behaviour |
+| 2026-11-06 | Report transport = SMTP from a mailbox the client owns (plain login password accepted; app password only if 2FA is enabled) | Catalyst Mail needs domain verification the client won't do; the mailbox is theirs, so the credential lives with them |

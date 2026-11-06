@@ -22,14 +22,14 @@ Additional rules from the project lead (4 Nov 2026):
 - Credit notes (always with the PO number, sometimes against a specific bill): create a **vendor credit** in Books — linked to the bill when the bill and PO are found, otherwise to the PO only — and say in the report "credit note X created, not linked to any bill". **Done and verified on the sandbox** (`src/pipeline/creditNote.js`): vendor credit created, applied to the bill, PDF attached; PO-only case flagged in the report.
 - Books API budget is not a constraint: the client's Zoho One plan allows 10,000 calls/day plus a 200,000/day add-on.
 - UAT exit: the client (project coordinator + accountant) switches the old Deluge schedule off only after UAT with all findings resolved.
-- One **end-of-day** report email with bills created (links), amount mismatches and unmatched POs, as a clean HTML dashboard. **Done and verified on Catalyst** (`src/report/daily.js`); goes to the log until the client's mailbox exists.
+- One **end-of-day** report email with bills created (links), amount mismatches and unmatched POs, as a clean HTML dashboard. **Done and verified on Catalyst** (`src/report/daily.js`); emailed from the client's mailbox since 6 Nov 2026.
 - Fixing a PO hours or days later must bill the document automatically without extra AI cost. Done (stored extraction, 6 h × 28).
 
 ## Client answers (6 Nov 2026)
 
 - Price policy: 5 % tolerance **only for lines invoiced below the PO price**, never above; within the tolerance the bill is created at the supplier invoice price. Implemented as the defaults above.
 - Web-shop (PrestaShop) purchase orders: treated exactly like purchase orders raised by the team — same £1 total tolerance, same line matching, carriage by the vendor's rule. No PO-level override.
-- Report mailbox: still being created by the client.
+- Report mailbox: provided 6 Nov 2026 — the digest is sent by SMTP from the client's mailbox (verified on Catalyst).
 - Historical backlog in the Books inbox: **not to be touched** — `SCAN_SINCE` (the go-live date) makes documents created before it invisible to the service.
 - MPN / Supplier Reference data: The organisation knows which items lack a code and updates them periodically — no readiness list from the integrator.
 - Documentation and handover follow UAT, since UAT may change behaviour.
