@@ -355,3 +355,22 @@ test('phase 2: any price increase → PRICE_MISMATCH; up to 5% lower → BILLED 
   assert.equal(kl.results[0].status, STATUS.BILLED, kl.results[0].reason_text); assert.equal(kl.results[0].lines.fallback, 'totals'); assert.equal(kl.results[0].match.basis, 'po_total');
   assert.ok(books3.calls.includes('item.get:it-k'), 'keyless PO line → item looked up for an MPN');
 });
+
+test('SCAN_SINCE: inbox documents created before the date are never read, recorded or deleted; later ones are processed; unparsable times are skipped', async () => {
+  const docs = [
+    { document_id: 'old1', file_name: 'old-2024.pdf', transactions: [], created_time: '2024-03-02T09:00:00+0000' },
+    { document_id: 'edge', file_name: 'edge.pdf', transactions: [], created_time: '2026-11-16T23:59:59+0000' },
+    { document_id: 'd1', file_name: 'a.pdf', transactions: [], created_time: '2026-11-17T08:00:00+0000' },
+    { document_id: 'odd', file_name: 'odd.pdf', transactions: [], created_time: 'yesterday' },
+  ];
+  const books = fakeBooks({ docs, pos });
+  const ex = fakeExtractor({ d1: { po_reference: 'PO-00001', gross: 120 }, old1: { po_reference: 'PO-00001', gross: 120 }, edge: { po_reference: 'PO-00001', gross: 120 }, odd: { po_reference: 'PO-00001', gross: 120 } });
+  const store = new JsonFileStore();
+  const r = await runAutoscan({ config: cfg({ DRY_RUN: 'false', SCAN_SINCE: '2026-11-17' }), books: books.api, extractor: ex, store, mailer: mailer(), logger });
+  assert.equal(r.billed, 1); assert.deepEqual(books.state.deleted, ['d1']);
+  assert.deepEqual(ex.seen, ['d1'], 'old documents are never sent to the AI');
+  const st = await store.getByDocumentIds(['old1', 'edge', 'odd', 'd1']);
+  assert.deepEqual([...st.keys()], ['d1'], 'only the eligible document is recorded');
+  const r2 = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: fakeBooks({ docs: [docs[0]], pos }).api, extractor: fakeExtractor({ old1: { po_reference: 'PO-00001', gross: 120 } }), store: new JsonFileStore(), mailer: mailer(), logger });
+  assert.equal(r2.billed, 1, 'without SCAN_SINCE every document is eligible');
+});

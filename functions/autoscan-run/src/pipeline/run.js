@@ -47,8 +47,18 @@ async function runAutoscan(deps) {
     const known = await store.getByDocumentIds(ids);
     const byId = new Map(inbox.map((d) => [String(d.document_id), d]));
 
-    const newDocs = inbox
-      .filter((d) => !known.has(String(d.document_id)))
+    // Documents older than SCAN_SINCE are the historical backlog: never read, never recorded, never reported.
+    const sinceMs = config.run.scanSince ? Date.parse(config.run.scanSince) : null;
+    const isOld = (d) => {
+      if (sinceMs === null) return false;
+      const t = parseBooksTime(d.created_time);
+      if (t === null) { logger.warn('scan.unparsable_created_time', { document_id: d.document_id, file_name: d.file_name, created_time: d.created_time }); return true; }
+      return t < sinceMs;
+    };
+    const unknown = inbox.filter((d) => !known.has(String(d.document_id)));
+    const skippedOld = unknown.filter(isOld).length;
+    const newDocs = unknown
+      .filter((d) => !isOld(d))
       .sort((a, b) => String(a.created_time || '').localeCompare(String(b.created_time || '')))
       .slice(0, config.run.maxNewPerRun);
 
@@ -60,7 +70,7 @@ async function runAutoscan(deps) {
       limit: config.run.maxRetryPerRun,
     })).filter((r) => byId.has(String(r.document_id))); // must still be in the inbox
 
-    logger.info('run.scan', { inbox: inbox.length, known: known.size, new: newDocs.length, retry: retryRecords.length, dry_run: config.run.dryRun });
+    logger.info('run.scan', { inbox: inbox.length, known: known.size, new: newDocs.length, retry: retryRecords.length, skipped_old: skippedOld, scan_since: config.run.scanSince, dry_run: config.run.dryRun });
 
     const ctx = { config, books, extractor, store, logger, terms, runId, now, claims: new Map() };
 
@@ -160,6 +170,13 @@ function summarise(results, stats) {
   }
   s.books_calls = stats ? stats.calls : 0;
   return s;
+}
+
+/** Books prints document times as "2026-11-05T10:45:09+0000" (no colon in the offset) or as a plain date; both → epoch ms, else null. */
+function parseBooksTime(v) {
+  if (!v) return null;
+  const t = Date.parse(String(v).replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+  return Number.isNaN(t) ? null : t;
 }
 
 module.exports = { runAutoscan, summarise };

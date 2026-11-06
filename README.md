@@ -86,7 +86,7 @@ npm run deploy        # generates functions/autoscan-run/catalyst-config.json fr
 
 ## Configuration
 
-All tunables are environment variables (`.env` locally, Catalyst env vars deployed — see `.env.example`). The ones finance will care about: `TOTAL_TOLERANCE` (GBP, default 1.00), `BILL_ADJUST_TO_INVOICE` (default true), `RETRY_AFTER_HOURS` (6) × `MAX_ATTEMPTS` (28), `MAX_NEW_PER_RUN` (40), `DRY_RUN`, `MAIL_TRANSPORT` (`log` | `smtp` | `catalyst`), `DAILY_REPORT_HOUR` (17, `off` to disable), `REPORT_PER_RUN` (false), `PO_PREFIX` / `PO_PAD_WIDTH` (the Books PO numbering, e.g. `PR-` / 5).
+All tunables are environment variables (`.env` locally, Catalyst env vars deployed — see `.env.example`). The ones finance will care about: `TOTAL_TOLERANCE` (GBP, default 1.00), `BILL_ADJUST_TO_INVOICE` (default true), `RETRY_AFTER_HOURS` (6) × `MAX_ATTEMPTS` (28), `MAX_NEW_PER_RUN` (40), `SCAN_SINCE` (production: the go-live date — inbox documents created before it are never read, recorded or reported, so the historical backlog stays untouched), `DRY_RUN`, `MAIL_TRANSPORT` (`log` | `smtp` | `catalyst`), `DAILY_REPORT_HOUR` (17, `off` to disable), `REPORT_PER_RUN` (false), `PO_PREFIX` / `PO_PAD_WIDTH` (the Books PO numbering, e.g. `PR-` / 5).
 
 ## Waiting on the client
 

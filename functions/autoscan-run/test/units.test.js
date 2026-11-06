@@ -145,6 +145,9 @@ test('config: MAIL_TRANSPORT=smtp requires SMTP_USER/SMTP_PASS and defaults REPO
   assert.throws(() => assertRuntimeConfig(loadConfig({ ...base, MAIL_TRANSPORT: 'smtp' })), /SMTP_USER, SMTP_PASS/);
   const cfg = assertRuntimeConfig(loadConfig({ ...base, MAIL_TRANSPORT: 'smtp', SMTP_USER: 'bot@example.test', SMTP_PASS: 'p' }));
   assert.equal(cfg.report.from, 'bot@example.test');
+  assert.throws(() => assertRuntimeConfig(loadConfig({ ...base, SCAN_SINCE: '17/11/2026' })), /SCAN_SINCE must be an ISO date/);
+  assert.equal(assertRuntimeConfig(loadConfig({ ...base, SCAN_SINCE: '2026-11-17' })).run.scanSince, '2026-11-17');
+  assert.equal(assertRuntimeConfig(loadConfig({ ...base, SCAN_SINCE: '' })).run.scanSince, null);
   assert.equal(cfg.report.smtp.host, 'smtp.zoho.eu'); assert.equal(cfg.report.smtp.port, 465); assert.equal(cfg.report.smtp.secure, true);
   assert.throws(() => assertRuntimeConfig(loadConfig({ ...base, MAIL_TRANSPORT: 'pigeon' })), /MAIL_TRANSPORT/);
   assert.equal(loadConfig(base).report.transport, 'log');

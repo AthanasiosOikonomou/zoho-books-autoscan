@@ -78,6 +78,9 @@ function loadConfig(env = process.env) {
     run: {
       dryRun: bool(env.DRY_RUN, true), // SAFE DEFAULT: never writes to Books unless explicitly false
       maxNewPerRun: num(env.MAX_NEW_PER_RUN, 40),
+      // Documents created in Books before this date are never read, recorded or reported (client: the historical
+      // backlog stays untouched). ISO date or date-time; unset = every inbox document is eligible (sandbox).
+      scanSince: env.SCAN_SINCE ? String(env.SCAN_SINCE).trim() : null,
       maxRetryPerRun: num(env.MAX_RETRY_PER_RUN, 20),
       concurrency: num(env.CONCURRENCY, 3),
       retryAfterHours: num(env.RETRY_AFTER_HOURS, 6), // human-fixable exceptions (PO missing, total mismatch…): re-checked every 6 h, no AI call
@@ -131,6 +134,9 @@ function assertRuntimeConfig(cfg) {
   if (cfg.report.transport === 'smtp') {
     if (!cfg.report.smtp.user) missing.push('SMTP_USER');
     if (!cfg.report.smtp.pass) missing.push('SMTP_PASS');
+  }
+  if (cfg.run.scanSince && Number.isNaN(Date.parse(cfg.run.scanSince))) {
+    throw new Error(`SCAN_SINCE must be an ISO date such as 2026-11-17 (got "${cfg.run.scanSince}")`);
   }
   if (missing.length) {
     throw new Error(`Missing required configuration: ${missing.join(', ')}`);
