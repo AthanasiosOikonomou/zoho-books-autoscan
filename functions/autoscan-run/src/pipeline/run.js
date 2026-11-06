@@ -49,6 +49,7 @@ async function runAutoscan(deps) {
 
     // Documents older than SCAN_SINCE are the historical backlog: never read, never recorded, never reported.
     const sinceMs = config.run.scanSince ? Date.parse(config.run.scanSince) : null;
+    if (sinceMs === null && !config.run.dryRun) logger.warn('scan.no_scan_since', { msg: 'SCAN_SINCE is not set: every document in the inbox is eligible, including any historical backlog' });
     const isOld = (d) => {
       if (sinceMs === null) return false;
       const t = parseBooksTime(d.created_time);

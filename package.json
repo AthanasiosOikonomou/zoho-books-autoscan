@@ -20,7 +20,8 @@
     "claude-check": "node scripts/claude-check.js",
     "catalyst-config": "node scripts/catalyst-config.js",
     "deploy": "node scripts/deploy.js",
-    "golden": "node scripts/golden.js"
+    "golden": "node scripts/golden.js",
+    "mail-test": "node scripts/mail-test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
