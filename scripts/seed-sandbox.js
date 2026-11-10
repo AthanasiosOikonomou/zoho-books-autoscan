@@ -94,6 +94,9 @@ const POS = [
     invoices: [{ suffix: 'A', label: 'Unit price −3.40 (−10.0%) → PRICE_MISMATCH (allowed down to −5%)', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { primer5: -3.4 } }] },
   { key: 'price_higher', vendor: 'rustoleum', number: null, reference: null, lines: [['combi1', 5]], carriage: 0,
     invoices: [{ suffix: 'A', label: 'Unit price +0.40 (+3.6%) → PRICE_MISMATCH (increases always go to review)', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { combi1: 0.4 } }] },
+  // --- carriage on the invoice, none on the PO: the bill gets its own carriage line (CARRIAGE_ITEM_ID, else CARRIAGE_ACCOUNT_ID)
+  { key: 'carriage_extra', vendor: 'harlow', number: null, reference: null, lines: [['roller', 4]], carriage: 0,
+    invoices: [{ suffix: 'A', label: 'PO has no carriage line, invoice carries 8.00, vendor rule Ignore → BILLED with an added carriage line', refStyle: 'zoho', lines: 'all', carriage: 8 }] },
 ];
 
 /**

@@ -29,7 +29,7 @@ function list(v, def = []) {
  *                 from the sandbox set: without a PROD_ value they are simply unset (DRY_RUN → true, i.e. safe).
  */
 const PROD_PREFIX = 'PROD_';
-const PROD_ONLY = ['BOOKS_ORG_ID', 'BOOKS_APP_BASE', 'DRY_RUN', 'SCAN_SINCE', 'CARRIAGE_ITEM_ID'];
+const PROD_ONLY = ['BOOKS_ORG_ID', 'BOOKS_APP_BASE', 'DRY_RUN', 'SCAN_SINCE', 'CARRIAGE_ITEM_ID', 'CARRIAGE_ACCOUNT_ID']; // ids belong to one organisation
 
 function profileOf(environment) {
   return String(environment || '').trim().toLowerCase() === 'production' ? 'production' : 'sandbox';
@@ -101,7 +101,10 @@ function loadConfig(rawEnv = process.env, { environment } = {}) {
       linePriceToleranceUpPct: num(env.LINE_PRICE_TOLERANCE_UP_PCT, 0), // allowed % above the PO unit price (0 = any increase → review)
       linePriceToleranceAbs: num(env.LINE_PRICE_TOLERANCE_ABS, 0.01), // GBP rounding guard, both directions
       supplierRefLabel: env.SUPPLIER_REF_LABEL || 'Supplier Reference', // item custom field printed on the PO
-      carriageItemId: env.CARRIAGE_ITEM_ID || '', // Books item used for carriage on bills when the PO has no carriage line (else: first line's account)
+      // Carriage on a bill whose PO has no carriage line: the carriage item when the organisation has ONE for all
+      // suppliers, otherwise the freight account (per-supplier carriage items all post there), otherwise the first line's account.
+      carriageItemId: env.CARRIAGE_ITEM_ID || '',
+      carriageAccountId: env.CARRIAGE_ACCOUNT_ID || '',
       carriageRuleLabel: env.CARRIAGE_RULE_LABEL || 'Carriage Rule', // vendor custom fields
       carriageToleranceLabel: env.CARRIAGE_TOLERANCE_LABEL || 'Carriage Tolerance',
       defaultCarriageRule: env.DEFAULT_CARRIAGE_RULE || 'Zero',

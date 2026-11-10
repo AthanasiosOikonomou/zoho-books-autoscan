@@ -79,6 +79,7 @@ function expectedOutcome(inv, key) {
   if (key === 'mismatch') return 'TOTAL_MISMATCH (Phase 1) / PRICE_MISMATCH +11.8% (Phase 2)';
   if (key === 'price_lower') return 'TOTAL_MISMATCH (Phase 1) → BILLED at the invoice price 47.30 (−3.0%, within the 5% below-PO tolerance), noted (Phase 2)';
   if (key === 'price_lower_far') return 'TOTAL_MISMATCH (Phase 1) / PRICE_MISMATCH −10.0% (Phase 2, allowed down to −5%)';
+  if (key === 'carriage_extra') return 'TOTAL_MISMATCH (Phase 1) → BILLED with an added carriage line 8.00 (Phase 2, Ignore; booked on CARRIAGE_ITEM_ID, else CARRIAGE_ACCOUNT_ID)';
   if (key === 'price_higher') return 'TOTAL_MISMATCH (Phase 1) / PRICE_MISMATCH +3.6% (Phase 2, increases always go to review)';
   if (key === 'carriage_zero') return 'TOTAL_MISMATCH (Phase 1) / CARRIAGE_MISMATCH — vendor rule Zero (Phase 2)';
   if (key === 'carriage_fixed') return 'TOTAL_MISMATCH (Phase 1) → BILLED with carriage 15.00 (Phase 2, Fixed ±5)';

@@ -347,7 +347,7 @@ test('profiles: Development uses the plain variables; Production uses PROD_ over
 
   const env = {
     BOOKS_ORG_ID: '111', BOOKS_CLIENT_ID: 'c', BOOKS_CLIENT_SECRET: 's', BOOKS_REFRESH_TOKEN: 'r', ANTHROPIC_API_KEY: 'k',
-    DRY_RUN: 'false', CARRIAGE_ITEM_ID: 'sandbox-item', BOOKS_APP_BASE: 'https://books.zoho.eu/app/111', PO_PAD_WIDTH: '5', TOTAL_TOLERANCE: '1', REPORT_TO: 'dev@example.test',
+    DRY_RUN: 'false', CARRIAGE_ITEM_ID: 'sandbox-item', CARRIAGE_ACCOUNT_ID: 'sandbox-account', BOOKS_APP_BASE: 'https://books.zoho.eu/app/111', PO_PAD_WIDTH: '5', TOTAL_TOLERANCE: '1', REPORT_TO: 'dev@example.test',
     PROD_BOOKS_ORG_ID: '999', PROD_SCAN_SINCE: '2026-11-17T14:00:00Z', PROD_PO_PAD_WIDTH: '6', PROD_REPORT_TO: 'finance@example.test', PROD_TOTAL_TOLERANCE: '',
   };
   const dev = assertRuntimeConfig(loadConfig(env, { environment: 'Development' }));
@@ -358,14 +358,14 @@ test('profiles: Development uses the plain variables; Production uses PROD_ over
   const prod = assertRuntimeConfig(loadConfig(env, { environment: 'Production' }));
   assert.equal(prod.profile, 'production'); assert.equal(prod.books.orgId, '999');
   assert.equal(prod.run.dryRun, true, 'DRY_RUN=false of the sandbox is never inherited');
-  assert.equal(prod.matching.carriageItemId, '', 'the sandbox carriage item does not exist in production');
+  assert.equal(prod.matching.carriageItemId, '', 'the sandbox carriage item does not exist in production'); assert.equal(prod.matching.carriageAccountId, '', 'nor does the sandbox account');
   assert.match(prod.report.booksAppBase, /\/app\/999$/, 'report links point at the production organisation');
   assert.equal(prod.run.scanSince, '2026-11-17T14:00:00Z'); assert.deepEqual(prod.report.to, ['finance@example.test']);
   assert.equal(prod.matching.totalTolerance, 1, 'an empty PROD_ value inherits the shared one');
   assert.equal(prod.books.clientId, 'c', 'shared credentials are inherited');
 
-  const live = assertRuntimeConfig(loadConfig({ ...env, PROD_DRY_RUN: 'false', PROD_CARRIAGE_ITEM_ID: 'prod-item' }, { environment: 'Production' }));
-  assert.equal(live.run.dryRun, false); assert.equal(live.matching.carriageItemId, 'prod-item');
+  const live = assertRuntimeConfig(loadConfig({ ...env, PROD_DRY_RUN: 'false', PROD_CARRIAGE_ACCOUNT_ID: 'prod-freight' }, { environment: 'Production' }));
+  assert.equal(live.run.dryRun, false); assert.equal(live.matching.carriageAccountId, 'prod-freight'); assert.equal(live.matching.carriageItemId, '');
 
   const noProd = { ...env }; delete noProd.PROD_BOOKS_ORG_ID; delete noProd.PROD_SCAN_SINCE;
   assert.throws(() => assertRuntimeConfig(loadConfig(noProd, { environment: 'Production' })), /PROD_BOOKS_ORG_ID.*PROD_SCAN_SINCE/, 'production refuses to start on the sandbox set');

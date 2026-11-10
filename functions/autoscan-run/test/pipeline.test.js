@@ -334,6 +334,17 @@ test('phase 2: carriage — Zero flags, Fixed within tolerance bills the invoice
   const extra = nBooks.state.created[0].payload.line_items.find((l) => !l.purchaseorder_item_id);
   assert.deepEqual([extra.item_id, extra.quantity, extra.rate, extra.tax_id], ['it-carr', 1, 12.5, 't20']);
   assert.equal(nBooks.state.created[0].total, r2((134.4 + 12.5) * 1.2), 'bill total = invoice total');
+  // per-supplier carriage items: no single item → the added line is booked on the freight account
+  const aBooks = mk('Ignore', 0, 0);
+  const a = await runAutoscan({ config: cfg({ ...P2, CARRIAGE_ACCOUNT_ID: 'acc-freight' }), books: aBooks.api, extractor: ex(), store: new JsonFileStore(), mailer: mailer(), logger });
+  assert.equal(a.results[0].status, STATUS.BILLED, a.results[0].reason_text);
+  const viaAccount = aBooks.state.created[0].payload.line_items.find((l) => !l.purchaseorder_item_id);
+  assert.deepEqual([viaAccount.item_id, viaAccount.account_id, viaAccount.rate, viaAccount.tax_id], [undefined, 'acc-freight', 12.5, 't20']);
+  // neither configured → the first product line's account
+  const dBooks = mk('Ignore', 0, 0);
+  const d = await runAutoscan({ config: cfg(P2), books: dBooks.api, extractor: ex(), store: new JsonFileStore(), mailer: mailer(), logger });
+  const viaFirst = dBooks.state.created[0].payload.line_items.find((l) => !l.purchaseorder_item_id);
+  assert.equal(d.results[0].status, STATUS.BILLED); assert.deepEqual([viaFirst.item_id, viaFirst.account_id], [undefined, 'a']);
 });
 test('phase 2: any price increase → PRICE_MISMATCH; up to 5% lower → BILLED at the invoice price with a note; further below → PRICE_MISMATCH; keyless PO → Phase 1 totals', async () => {
   const pos2 = [{ purchaseorder_id: 'po7', purchaseorder_number: 'PO-00070', vendor_id: 'v1', vendor_name: 'Vendor', total: r2(3 * 34 * 1.2), payment_terms: 30, line_items: [poLine('p', 'CP-PR5', 3, 34)] }];

@@ -62,7 +62,7 @@ const { createBooksClient } = fn('books/client');
     const byAccount = new Map();
     console.log(`\n${rows.length} item(s) matching "${arg || ''}":`);
     for (const it of rows) {
-      const acct = it.purchase_account_name || '(no purchase account)';
+      const acct = it.purchase_account_name ? `${it.purchase_account_name} [${it.purchase_account_id}]` : '(no purchase account)';
       byAccount.set(acct, (byAccount.get(acct) || 0) + 1);
       const extra = Object.keys(it).filter((k) => /^cf_.*(supplier|vendor)/i.test(k) && it[k]).map((k) => `${k}=${it[k]}`).join(' ');
       console.log(`  ${it.item_id}  ${String(it.name || '').padEnd(44).slice(0, 44)}  sku=${String(it.sku || '').padEnd(12)}  ${it.status === 'active' ? '' : `[${it.status}] `}${acct}${it.vendor_name ? `  vendor=${it.vendor_name}` : ''}${extra ? `  ${extra}` : ''}`);

@@ -212,7 +212,7 @@ async function processDocument(ctx, doc, prior) {
       const c = lineMatch.carriage;
       if (c.invoice > 0) {
         if (c.poLineId) { quantities[c.poLineId] = 1; rates[c.poLineId] = c.invoice; }
-        else extraLines.push(carriageLine(template, c.invoice, config.matching.carriageItemId));
+        else extraLines.push(carriageLine(template, c.invoice, { itemId: config.matching.carriageItemId, accountId: config.matching.carriageAccountId }));
       }
       const tl = template.line_items || [];
       for (const id of Object.keys(quantities)) if (!tl.some((t) => String(t.purchaseorder_item_id) === String(id))) {
@@ -271,10 +271,16 @@ async function itemsForPo(ctx, books, po, matching, logger) {
 }
 
 /** A carriage line for a bill whose PO has no carriage line: the configured carriage item, else the first line's account. */
-function carriageLine(template, amount, carriageItemId) {
+/**
+ * The bill line for invoice carriage when the PO has no carriage line to reuse. Booked, in order of preference, on the
+ * organisation's carriage item (one item for all suppliers), on the freight account (organisations that keep one
+ * carriage item per supplier — any of them posts to that account), or on the first product line's account.
+ */
+function carriageLine(template, amount, { itemId, accountId } = {}) {
   const first = (template.line_items || [])[0] || {};
   const li = { name: 'Carriage', description: 'Carriage / delivery as invoiced', quantity: 1, rate: amount };
-  if (carriageItemId) li.item_id = carriageItemId;
+  if (itemId) li.item_id = itemId;
+  else if (accountId) li.account_id = accountId;
   else if (first.account_id) li.account_id = first.account_id;
   if (first.tax_id) li.tax_id = first.tax_id;
   return li;
