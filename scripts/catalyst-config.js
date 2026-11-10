@@ -22,7 +22,6 @@ const TARGET = path.join(FN_DIR, 'catalyst-config.json');
 
 // Variables that belong to the deployed function. Local-only ones are excluded on purpose.
 const DEPLOY_VARS = [
-  'AUTOSCAN_ENV',
   'BOOKS_DC', 'BOOKS_ORG_ID', 'BOOKS_CLIENT_ID', 'BOOKS_CLIENT_SECRET', 'BOOKS_REFRESH_TOKEN', 'BOOKS_RATE_PER_MIN', 'BOOKS_MAX_RETRIES', 'BOOKS_INBOX_PAGE_SIZE',
   'ANTHROPIC_API_KEY', 'CLAUDE_MODEL', 'CLAUDE_FALLBACK_MODEL', 'CLAUDE_FALLBACK_BELOW_CONFIDENCE', 'CLAUDE_MAX_OUTPUT_TOKENS', 'CLAUDE_TIMEOUT_MS', 'CLAUDE_MAX_RETRIES', 'CLAUDE_PAGE_CAP', 'CLAUDE_PROMPT_CACHE',
   'TOTAL_TOLERANCE', 'BILL_ADJUST_TO_INVOICE', 'CONFIDENCE_THRESHOLD', 'PO_PREFIX', 'PO_PAD_WIDTH', 'PO_EXAMPLE', 'PO_LEGACY_PREFIXES', 'MATCH_AGAINST_REMAINING', 'PHASE2_ENABLED',
@@ -40,9 +39,22 @@ const check = process.argv.includes('--check');
 const example = JSON.parse(fs.readFileSync(EXAMPLE, 'utf8'));
 const env = {};
 for (const k of DEPLOY_VARS) if (process.env[k] !== undefined && process.env[k] !== '') env[k] = String(process.env[k]);
+// Production profile: the same file is deployed to both Catalyst environments; in Production the function reads
+// PROD_<NAME> first (see src/config.js). Any PROD_ counterpart of a deployable variable travels with the deploy.
+const prodVars = [];
+for (const k of DEPLOY_VARS) {
+  const pk = `PROD_${k}`;
+  if (process.env[pk] !== undefined && process.env[pk] !== '') { env[pk] = String(process.env[pk]); prodVars.push(pk); }
+}
 const missing = [...REQUIRED, ...MAIL_REQUIRED].filter((k) => !env[k]);
 if (missing.length) { console.error(`Missing in .env: ${missing.join(', ')}`); process.exit(2); }
 if (env.DRY_RUN !== 'false') console.log('Note: DRY_RUN is not "false" — the deployed function will run in dry-run mode (correct until UAT sign-off).');
+
+const prodMissing = ['PROD_BOOKS_ORG_ID', 'PROD_SCAN_SINCE'].filter((k) => !env[k]);
+if (!prodVars.length) console.log('Note: no PROD_ variables in .env — fine while only the Development environment is used.');
+else if (prodMissing.length) console.log(`Note: production profile incomplete (${prodMissing.join(', ')}) — the function refuses to run in the Production environment until they are set.`);
+else if (env.PROD_DRY_RUN !== 'false') console.log('Note: PROD_DRY_RUN is not "false" — Production will run in dry-run mode (correct until UAT sign-off).');
+else console.log('WARNING: PROD_DRY_RUN=false — the Production environment will create bills in the production organisation.');
 
 const out = { ...example, deployment: { ...example.deployment, env_variables: env } };
 console.log(`${check ? 'Would write' : 'Writing'} ${path.relative(process.cwd(), TARGET)} with ${Object.keys(env).length} variables: ${Object.keys(env).join(', ')}`);

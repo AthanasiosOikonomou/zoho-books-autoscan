@@ -20,7 +20,9 @@ module.exports = async (jobRequest, context) => {
   const logger = createLogger({ level: process.env.LOG_LEVEL || 'info' });
   try {
     const app = catalyst.initialize(context, { scope: 'admin' });
-    const config = assertRuntimeConfig(loadConfig(process.env));
+    const environment = catalystEnvironment(app, context);
+    const config = assertRuntimeConfig(loadConfig(process.env, { environment: environment.name }));
+    logger.info('job.profile', { profile: config.profile, catalyst_environment: environment.name, source: environment.source, books_org: config.books.orgId, dry_run: config.run.dryRun, scan_since: config.run.scanSince });
 
     const maxMs = parseInt(context.getMaxExecutionTimeMs(), 10) || 900000;
     const deadlineAt = Date.now() + Math.floor(maxMs * config.run.timeBudgetRatio);
@@ -48,6 +50,18 @@ module.exports = async (jobRequest, context) => {
     context.closeWithFailure();
   }
 };
+
+/**
+ * The environment Catalyst runs this invocation in ("Development" | "Production"): the x-zc-environment header of the
+ * invocation, which is also what the SDK reads. Without the header the SDK assumes "Development" — the sandbox profile.
+ */
+function catalystEnvironment(app, context) {
+  const headers = (context && context.catalystHeaders) || {};
+  const header = headers['x-zc-environment'];
+  if (header) return { name: String(header), source: 'header' };
+  const fromSdk = app && app.config && app.config.environment;
+  return { name: fromSdk || 'Development', source: 'sdk_default' };
+}
 
 /** Job params as a plain object, whatever shape the SDK hands over (getAllJobParams(), plain object, or nothing). */
 function jobParams(jobRequest) {

@@ -339,3 +339,36 @@ test('CatalystStore: a cleared reason is written as empty string so the update o
   assert.equal(back.reason_text, null);
   assert.equal(back.attempts, 2);
 });
+
+test('profiles: Development uses the plain variables; Production uses PROD_ overrides, inherits shared keys, never inherits the sandbox-only ones', () => {
+  const { profileOf } = require('../src/config');
+  assert.equal(profileOf('Production'), 'production'); assert.equal(profileOf('production'), 'production');
+  assert.equal(profileOf('Development'), 'sandbox'); assert.equal(profileOf(undefined), 'sandbox'); assert.equal(profileOf('staging'), 'sandbox');
+
+  const env = {
+    BOOKS_ORG_ID: '111', BOOKS_CLIENT_ID: 'c', BOOKS_CLIENT_SECRET: 's', BOOKS_REFRESH_TOKEN: 'r', ANTHROPIC_API_KEY: 'k',
+    DRY_RUN: 'false', CARRIAGE_ITEM_ID: 'sandbox-item', BOOKS_APP_BASE: 'https://books.zoho.eu/app/111', PO_PAD_WIDTH: '5', TOTAL_TOLERANCE: '1', REPORT_TO: 'dev@example.test',
+    PROD_BOOKS_ORG_ID: '999', PROD_SCAN_SINCE: '2026-11-17T14:00:00Z', PROD_PO_PAD_WIDTH: '6', PROD_REPORT_TO: 'finance@example.test', PROD_TOTAL_TOLERANCE: '',
+  };
+  const dev = assertRuntimeConfig(loadConfig(env, { environment: 'Development' }));
+  assert.equal(dev.profile, 'sandbox'); assert.equal(dev.books.orgId, '111'); assert.equal(dev.run.dryRun, false);
+  assert.equal(dev.run.scanSince, null); assert.equal(dev.matching.carriageItemId, 'sandbox-item'); assert.deepEqual(dev.report.to, ['dev@example.test']);
+  assert.equal(assertRuntimeConfig(loadConfig(env)).profile, 'sandbox', 'no environment given (local scripts) → sandbox');
+
+  const prod = assertRuntimeConfig(loadConfig(env, { environment: 'Production' }));
+  assert.equal(prod.profile, 'production'); assert.equal(prod.books.orgId, '999');
+  assert.equal(prod.run.dryRun, true, 'DRY_RUN=false of the sandbox is never inherited');
+  assert.equal(prod.matching.carriageItemId, '', 'the sandbox carriage item does not exist in production');
+  assert.match(prod.report.booksAppBase, /\/app\/999$/, 'report links point at the production organisation');
+  assert.equal(prod.run.scanSince, '2026-11-17T14:00:00Z'); assert.deepEqual(prod.report.to, ['finance@example.test']);
+  assert.equal(prod.matching.totalTolerance, 1, 'an empty PROD_ value inherits the shared one');
+  assert.equal(prod.books.clientId, 'c', 'shared credentials are inherited');
+
+  const live = assertRuntimeConfig(loadConfig({ ...env, PROD_DRY_RUN: 'false', PROD_CARRIAGE_ITEM_ID: 'prod-item' }, { environment: 'Production' }));
+  assert.equal(live.run.dryRun, false); assert.equal(live.matching.carriageItemId, 'prod-item');
+
+  const noProd = { ...env }; delete noProd.PROD_BOOKS_ORG_ID; delete noProd.PROD_SCAN_SINCE;
+  assert.throws(() => assertRuntimeConfig(loadConfig(noProd, { environment: 'Production' })), /PROD_BOOKS_ORG_ID.*PROD_SCAN_SINCE/, 'production refuses to start on the sandbox set');
+  assert.throws(() => assertRuntimeConfig(loadConfig({ ...env, PROD_BOOKS_ORG_ID: '111' }, { environment: 'Production' })), /sandbox organisation/);
+  assert.throws(() => assertRuntimeConfig(loadConfig({ ...env, PROD_SCAN_SINCE: '17/11/2026' }, { environment: 'Production' })), /PROD_SCAN_SINCE must be an ISO date/);
+});

@@ -20,9 +20,42 @@ function list(v, def = []) {
   return String(v).split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-function loadConfig(env = process.env) {
+/**
+ * Environment profiles. The SAME variable set is deployed to both Catalyst environments; the function picks its profile
+ * from the environment Catalyst reports at run time (never from a variable — that would be identical in both):
+ *
+ *   Development → the plain variables (the Books sandbox organisation)
+ *   Production  → PROD_<NAME> when it is set, otherwise <NAME> — except PROD_ONLY below, which are never inherited
+ *                 from the sandbox set: without a PROD_ value they are simply unset (DRY_RUN → true, i.e. safe).
+ */
+const PROD_PREFIX = 'PROD_';
+const PROD_ONLY = ['BOOKS_ORG_ID', 'BOOKS_APP_BASE', 'DRY_RUN', 'SCAN_SINCE', 'CARRIAGE_ITEM_ID'];
+
+function profileOf(environment) {
+  return String(environment || '').trim().toLowerCase() === 'production' ? 'production' : 'sandbox';
+}
+function resolveEnv(env, profile) {
+  if (profile !== 'production') return env;
+  const out = {};
+  for (const [k, v] of Object.entries(env)) if (!k.startsWith(PROD_PREFIX) && !PROD_ONLY.includes(k)) out[k] = v;
+  for (const [k, v] of Object.entries(env)) {
+    if (k.startsWith(PROD_PREFIX) && v !== undefined && v !== null && String(v) !== '') out[k.slice(PROD_PREFIX.length)] = v;
+  }
+  return out;
+}
+
+/**
+ * @param {object} rawEnv                 process.env (or a plain object in tests)
+ * @param {object} [opts]
+ * @param {string} [opts.environment]     the Catalyst environment name ("Development" | "Production"); anything else = sandbox
+ */
+function loadConfig(rawEnv = process.env, { environment } = {}) {
+  const profile = profileOf(environment);
+  const env = resolveEnv(rawEnv, profile);
   const cfg = {
-    env: env.AUTOSCAN_ENV || 'development',
+    profile, // 'sandbox' | 'production'
+    environment: environment || null,
+    sandboxOrgId: rawEnv.BOOKS_ORG_ID || '',
 
     // --- Zoho Books ---------------------------------------------------------
     books: {
@@ -123,7 +156,9 @@ function loadConfig(env = process.env) {
 
 function assertRuntimeConfig(cfg) {
   const missing = [];
-  if (!cfg.books.orgId) missing.push('BOOKS_ORG_ID');
+  const prod = cfg.profile === 'production';
+  const name = (k) => (prod && PROD_ONLY.includes(k) ? `${PROD_PREFIX}${k}` : k);
+  if (!cfg.books.orgId) missing.push(name('BOOKS_ORG_ID'));
   if (!cfg.books.clientId) missing.push('BOOKS_CLIENT_ID');
   if (!cfg.books.clientSecret) missing.push('BOOKS_CLIENT_SECRET');
   if (!cfg.books.refreshToken) missing.push('BOOKS_REFRESH_TOKEN');
@@ -136,7 +171,15 @@ function assertRuntimeConfig(cfg) {
     if (!cfg.report.smtp.pass) missing.push('SMTP_PASS');
   }
   if (cfg.run.scanSince && Number.isNaN(Date.parse(cfg.run.scanSince))) {
-    throw new Error(`SCAN_SINCE must be an ISO date such as 2026-11-17 (got "${cfg.run.scanSince}")`);
+    throw new Error(`${name('SCAN_SINCE')} must be an ISO date such as 2026-11-17 (got "${cfg.run.scanSince}")`);
+  }
+  if (prod) {
+    // Production never starts without a go-live cutoff (the historical backlog must stay untouched, dry-run included)
+    // and never against the sandbox organisation.
+    if (!cfg.run.scanSince) missing.push(name('SCAN_SINCE'));
+    if (cfg.books.orgId && cfg.sandboxOrgId && String(cfg.books.orgId) === String(cfg.sandboxOrgId)) {
+      throw new Error('PROD_BOOKS_ORG_ID equals BOOKS_ORG_ID (the sandbox organisation) — the production profile will not run against it');
+    }
   }
   if (missing.length) {
     throw new Error(`Missing required configuration: ${missing.join(', ')}`);
@@ -144,4 +187,4 @@ function assertRuntimeConfig(cfg) {
   return cfg;
 }
 
-module.exports = { loadConfig, assertRuntimeConfig };
+module.exports = { loadConfig, assertRuntimeConfig, profileOf, resolveEnv, PROD_ONLY, PROD_PREFIX };

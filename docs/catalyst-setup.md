@@ -108,7 +108,14 @@ npm run catalyst-config          # writes functions/autoscan-run/catalyst-config
 npm run deploy                   # = catalyst-config + catalyst deploy --only functions
 ```
 
-Keep `DRY_RUN=true` in `.env` until UAT sign-off; the deployed job then reports but never writes to Books.
+**One `.env` for both environments.** The same variable set is deployed everywhere. The function asks Catalyst which environment it is running in (the `x-zc-environment` value of the invocation — the first log line of every run, `job.profile`, prints it) and picks its profile:
+
+| Catalyst environment | Profile | Variables used |
+|---|---|---|
+| Development | `sandbox` | the plain ones — `BOOKS_ORG_ID` = the sandbox organisation |
+| Production | `production` | `PROD_<NAME>` when set, otherwise `<NAME>` |
+
+Five variables are never inherited by the production profile — `BOOKS_ORG_ID`, `BOOKS_APP_BASE`, `DRY_RUN`, `SCAN_SINCE`, `CARRIAGE_ITEM_ID`. Without their `PROD_` value the production function either refuses to start (`PROD_BOOKS_ORG_ID`, `PROD_SCAN_SINCE`) or stays safe (`PROD_DRY_RUN` empty = dry-run). It also refuses to start if `PROD_BOOKS_ORG_ID` equals the sandbox organisation. Local scripts (`npm run seed`, `probe`, `golden`, `run`) always use the plain variables, so they can never reach production by accident.
 
 ## 6. Job pool + first run
 
@@ -133,4 +140,10 @@ To send it on demand: the Console's Submit Job has no params field, so the pract
 
 ## 8. Promote to Production (go-live, later)
 
-Create the same two tables in Production, switch `.env` to production values (Books org, `PO_PREFIX=PO-`, `PO_PAD_WIDTH=6` — production Books POs are numbered like `PO-000482`, legacy ones bare 6 digits, production API key named `autoscan-production` from a **service account**, **`SCAN_SINCE` = the moment of the production deploy, in UTC** (e.g. `2026-11-17T14:00:00Z`) so only documents that arrive after go-live are read and the historical backlog in the inbox is never touched, `CARRIAGE_ITEM_ID` = the Books item finance uses for carriage, the vendor fields *Carriage Rule* / *Carriage Tolerance* and the item field *Supplier Reference* present with those labels, `REPORT_TO` = the finance inbox, the client's own SMTP mailbox + app password (or `MAIL_TRANSPORT=catalyst` with their verified domain), `DRY_RUN=false`), `npm run deploy` against Production, enable the cron, and switch off the old Deluge schedule.
+Nothing in `.env` is "switched" — production has its own `PROD_` values next to the sandbox ones (§5).
+
+1. **Books (production organisation)**: vendor custom fields *Carriage Rule* (Zero / Fixed / Ignore) and *Carriage Tolerance*, item field *Supplier Reference* — same labels as the sandbox; finance sets the rule per supplier. The Self Client is the same one (one client covers both organisations).
+2. **`.env`**: `PROD_BOOKS_ORG_ID`, `PROD_SCAN_SINCE` = the go-live moment in UTC (e.g. `2026-11-17T14:00:00Z` — only documents that arrive after it are read; the historical backlog is never touched), `PROD_DRY_RUN=true`, `PROD_PO_PREFIX=PO-` / `PROD_PO_PAD_WIDTH=6` (production POs are numbered like `PO-000482`, legacy ones bare 6 digits), `PROD_CARRIAGE_ITEM_ID` = the item finance uses for carriage, `PROD_REPORT_TO` = the finance inbox. Then `npm run deploy` (Development gets the new variables; nothing changes there).
+3. **Catalyst Console → Settings → Environments → deploy to Production** (functions, Data Store tables, Job Scheduling). Check in Production: both tables exist (empty), the job pool and the cron exist and are enabled, and the function's environment variables include the `PROD_` ones — if the deployment did not carry the variables over, set them in the Console for Production.
+4. **First production run**: the log must show `job.profile` with `profile: "production"`, the production organisation and `dry_run: true`, and `run.scan` with `skipped_old` = the size of the backlog. If it says `profile: "sandbox"`, stop the cron: Catalyst did not report the environment and the production profile is not active.
+5. **After UAT sign-off**: `PROD_DRY_RUN=false`, deploy, deploy to Production again; the client switches off the old Deluge schedule.

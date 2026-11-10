@@ -71,7 +71,7 @@ async function runAutoscan(deps) {
       limit: config.run.maxRetryPerRun,
     })).filter((r) => byId.has(String(r.document_id))); // must still be in the inbox
 
-    logger.info('run.scan', { inbox: inbox.length, known: known.size, new: newDocs.length, retry: retryRecords.length, skipped_old: skippedOld, scan_since: config.run.scanSince, dry_run: config.run.dryRun });
+    logger.info('run.scan', { profile: config.profile || 'sandbox', inbox: inbox.length, known: known.size, new: newDocs.length, retry: retryRecords.length, skipped_old: skippedOld, scan_since: config.run.scanSince, dry_run: config.run.dryRun });
 
     const ctx = { config, books, extractor, store, logger, terms, runId, now, claims: new Map() };
 
