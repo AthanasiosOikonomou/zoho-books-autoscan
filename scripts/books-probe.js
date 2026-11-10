@@ -12,6 +12,7 @@
  *   node scripts/books-probe.js item <item_id> → one item as the API returns it (mpn / sku / custom_fields)
  *   node scripts/books-probe.js vendor <contact_id> → one vendor (custom_fields → carriage rule / tolerance)
  *   node scripts/books-probe.js find "IPO/354120" → how a supplier's PO reference resolves: PO number, then reference_number
+ *   node scripts/books-probe.js items carriage → compact list of the items matching a search text (id, name, sku, purchase account)
  *
  * Any command accepts --org <organization_id> to look at ANOTHER org read-only (e.g. production, to check how
  * legacy IPO/ references are stored and which item fields carry the MPN). Nothing here writes.
@@ -48,6 +49,26 @@ const { createBooksClient } = fn('books/client');
     const json = await books.request(arg);
     console.log(`\nGET ${arg} → keys: ${Object.keys(json).join(', ')}`);
     console.log(JSON.stringify(json, null, 1).slice(0, 1500));
+    return;
+  }
+  if (what === 'items') {
+    // compact list of items matching a search text — one line each, then a count per purchase account
+    const rows = [];
+    for (let page = 1; page <= 10; page++) {
+      const json = await books.request('/items', { query: { search_text: arg || '', page, per_page: 200 } });
+      rows.push(...(json.items || []));
+      if (!json.page_context || !json.page_context.has_more_page) break;
+    }
+    const byAccount = new Map();
+    console.log(`\n${rows.length} item(s) matching "${arg || ''}":`);
+    for (const it of rows) {
+      const acct = it.purchase_account_name || '(no purchase account)';
+      byAccount.set(acct, (byAccount.get(acct) || 0) + 1);
+      const extra = Object.keys(it).filter((k) => /^cf_.*(supplier|vendor)/i.test(k) && it[k]).map((k) => `${k}=${it[k]}`).join(' ');
+      console.log(`  ${it.item_id}  ${String(it.name || '').padEnd(44).slice(0, 44)}  sku=${String(it.sku || '').padEnd(12)}  ${it.status === 'active' ? '' : `[${it.status}] `}${acct}${it.vendor_name ? `  vendor=${it.vendor_name}` : ''}${extra ? `  ${extra}` : ''}`);
+    }
+    console.log('\nBy purchase account:');
+    for (const [a, n] of [...byAccount.entries()].sort((x, y) => y[1] - x[1])) console.log(`  ${String(n).padStart(4)}  ${a}`);
     return;
   }
   if (what === 'find') {
