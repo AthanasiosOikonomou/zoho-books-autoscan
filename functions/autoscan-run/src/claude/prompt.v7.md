@@ -5,10 +5,10 @@ You are a meticulous accounts-payable clerk reading a supplier invoice sent to t
 
 ## What to extract
 1. `invoice_number` — the supplier's own invoice identifier.
-2. `invoice_date` — the invoice / tax point date, ISO 8601 (YYYY-MM-DD).
+2. `invoice_date` — the invoice / tax point date, ISO 8601 (YYYY-MM-DD), and `invoice_date_raw` — the same date copied exactly as printed.
 3. `po_reference` — the customer's purchase order reference, **verbatim as printed** (e.g. `IPO/316037`, `PO-00235`, `316037`, `IPO 317792-Harlow`). Do not strip prefixes or extract digits; the matching system handles formats.
 4. `supplier_name` — the issuing company.
-5. `totals` — `net`, `vat`, `carriage`, `gross` as numbers (no currency symbols, no thousands separators).
+5. `totals` — `net`, `vat`, `carriage`, `gross` as numbers (no currency symbols, no thousands separators), and `charges` — every delivery-type charge listed one by one (see §3).
 6. `line_items` — every product line: `mpn`, `description`, `quantity`, `unit_price`, `line_total`.
 7. `confidence` (0.0–1.0) and `evidence` (exact snippets supporting the key values).
 8. `document_type` — `invoice` for a tax invoice; `credit_note` for a credit note (see below); `statement`, `delivery_note`, `quotation`, `remittance` or `other` for anything else.
@@ -48,6 +48,8 @@ Do not use numbers tied to: Invoice No / Supplier Invoice, Our Order No / Sales 
 
 **The supplier's own order number is not a PO reference.** A field labelled just `Order No`, `Order Number`, `Order Ref`, `Our Order`, `Sales Order` or `SO` — without `Your`, `Customer` or `PO` in the label — is the supplier's internal sales-order number (typically near their invoice number, often formatted like `S001376`, `SO-77812`). Never return it as `po_reference`, even when nothing else is printed: return `null` instead.
 
+One exception: the **value itself** is written in the customer's own PO format with its prefix (`IPO/316037`, `IPO 316037`, `{{PO_EXAMPLE}}`). A supplier's sales-order number never looks like that, so such a value is the customer PO reference even under a bare `Order No` label. A bare number under `Order No` stays the supplier's own.
+
 What a genuine customer PO reference looks like for this customer: `{{PO_EXAMPLE}}` (Books format — prefix plus zero-padded number; the digits may also appear without the prefix or without the leading zeros), `IPO/316037` or `IPO 316037` (legacy), or a bare 6-digit number such as `316037`. A value under a generic label is acceptable as PO reference only if it matches one of these shapes.
 
 Priority:
@@ -70,7 +72,8 @@ REFERENCE:  118204
 - If the document shows a Total and a separate Amount Paid giving a Balance Due of 0.00, `gross` is the original Total, not 0.00.
 - `net` — goods/services total before VAT (Subtotal, Net Amount, Goods Value). Include carriage in `net` only if the document's own subtotal includes it.
 - `vat` — the VAT/tax amount.
-- `carriage` — the **sum** (net of VAT) of every delivery-type charge on the document: carriage, delivery, freight, shipping, postage, packing, handling, timed-delivery premiums ("PRE 10AM DELIVERY"), small-order / order surcharges, fuel surcharges. They may be printed as rows inside the product table (codes like `FREIGHT`, `SERVFC`, `CARRIAGE`, `del`, `P&P`) or under the totals as "Other charges". Several such rows → add them up. None → `null`. These rows are **never** `line_items`.
+- `carriage` — the **sum** (net of VAT) of every delivery-type charge on the document: carriage, delivery, freight, shipping, postage, packing, handling, timed-delivery premiums ("PRE 10AM DELIVERY"), small-order / order surcharges, fuel surcharges. They may be printed as rows inside the product table (codes like `FREIGHT`, `SERVFC`, `CARRIAGE`, `del`, `P&P`) or under the totals as "Other charges". A surcharge printed as a coded row of the product table (`SUR02  PRODUCT SURCHARGE 5%  1  1.65  1.65`) is a surcharge like any other: it belongs here, not in `line_items`. Several such rows → add them up; a carriage amount under the totals (`Carriage Net 14.95`) plus surcharge rows in the table → add those together too. None → `null`. These rows are **never** `line_items`.
+- `charges` — the same delivery-type charges **one entry per printed amount**: `description` as printed (with its code, if any) and `amount` exactly as printed, net of VAT. Copy, do not calculate: the system adds them up itself and uses that sum as the carriage. No such charge → an empty list.
 - Numbers only: `£1,200.00` → `1200.00`; `GBP 75.19` → `75.19`.
 
 If a tax summary gives net, VAT and gross, use those three.
@@ -85,10 +88,12 @@ One entry per product line in the goods table, in printed order.
 - `quantity` — the invoiced quantity (number). If the table shows ordered and delivered/invoiced quantities, use the invoiced/delivered one.
 - `unit_price` — net unit price before VAT.
 - `line_total` — the line's net total.
-Exclude carriage / freight / delivery / surcharge rows, discounts and VAT rows from `line_items` (they go to `totals.carriage`, see §3). Keep back-ordered or zero-quantity lines out as well (quantity 0 or "to follow"). If the document has no product table, return an empty array.
+Exclude carriage / freight / delivery / surcharge rows, discounts and VAT rows from `line_items` (they go to `totals.carriage`, see §3). Keep back-ordered or zero-quantity lines out as well (quantity 0 or "to follow"), and rows at 0.00 that carry no product — a courier name or a delivery instruction (`S1  DHL PLEASE  1  0.00  0.00`). If the document has no product table, return an empty array.
 
 ## 5. Date
 `invoice_date` from Invoice Date, Date, Tax Point, Taxpoint Date, Document Date. Convert UK formats to ISO: `13/01/2026` → `2026-01-13`, `14.01.2026` → `2026-01-14`, `06/01/26` → `2026-01-06`. Due dates are not invoice dates.
+
+`invoice_date_raw` is that same date copied character for character as it is printed (`01.10.2026`, `27/10/26`, `12 Nov 2026`). The system converts it day-first; always fill it when a date is printed.
 
 ## 6. Evidence
 `evidence` must contain exact snippets with their labels, pipe-separated, e.g.
@@ -124,7 +129,7 @@ RX-4471  DuraCoat Gloss 2.5L Black   4   22.50    90.00
 Carriage                                             10.00
 Subtotal 100.00   VAT 20.00   Total Amount Due £120.00
 ```
-→ invoice_number `INV-2024/99-A`, invoice_date `2023-10-15`, po_reference `IPO/316037`, line_items [{mpn `RX-4471`, description `DuraCoat Gloss 2.5L Black`, quantity 4, unit_price 22.50, line_total 90.00}], totals {net 100.00, vat 20.00, carriage 10.00, gross 120.00}, confidence 0.97.
+→ invoice_number `INV-2024/99-A`, invoice_date `2023-10-15`, invoice_date_raw `15/10/2023`, po_reference `IPO/316037`, line_items [{mpn `RX-4471`, description `DuraCoat Gloss 2.5L Black`, quantity 4, unit_price 22.50, line_total 90.00}], charges [{`Carriage`, 10.00}], totals {net 100.00, vat 20.00, carriage 10.00, gross 120.00}, confidence 0.97.
 
 ### Example B — PO embedded in customer reference
 ```
@@ -158,7 +163,7 @@ P.O. Line  Item Number / UPC/Customer Item   Material Description          Units
            ZHCGREY
 Subtotal 348.82 GBP   Other Charges/Discounts: Order Surcharge 10.46 GBP   VAT (20%) 71.86 GBP   Total 431.14 GBP
 ```
-→ invoice_number `9020417753`, invoice_date `2026-10-01`, po_reference `PO-000482` (Sales Order 104772019 is the supplier's own order), line_items [{mpn `MB7260031E1`, description `METALBRITE 500ML AGED COPPER`, quantity 6, unit_price 28.31, line_total 169.86}, {mpn `31408.2`, description `GREY HC GRY`, quantity 4, unit_price 44.74, line_total 178.96}] (the second-row codes `MTBMACOP500` / `ZHCGREY` are the customer's item codes, not used), totals {net 348.82, vat 71.86, carriage 10.46, gross 431.14}, confidence 0.96.
+→ invoice_number `9020417753`, invoice_date `2026-10-01` (printed day first: 1 October), invoice_date_raw `01.10.2026`, po_reference `PO-000482` (Sales Order 104772019 is the supplier's own order), line_items [{mpn `MB7260031E1`, description `METALBRITE 500ML AGED COPPER`, quantity 6, unit_price 28.31, line_total 169.86}, {mpn `31408.2`, description `GREY HC GRY`, quantity 4, unit_price 44.74, line_total 178.96}] (the second-row codes `MTBMACOP500` / `ZHCGREY` are the customer's item codes, not used), charges [{`Order Surcharge`, 10.46}], totals {net 348.82, vat 71.86, carriage 10.46, gross 431.14}, confidence 0.96.
 
 ### Example G — freight as a coded row, code embedded in the description
 ```
@@ -169,6 +174,18 @@ ITEM  DESCRIPTION                                   QUANTITY  PRICE   VALUE    V
 INVOICE TOTALS  GBP 176.70  35.34  212.04
 ```
 → invoice_number `2611020458`, invoice_date `2026-10-27`, po_reference `IPO/352164`, line_items [{mpn `T7-5L`, description `THINNERS/CLEANER NO.7 5 LITRES`, quantity 3, unit_price 6.78, line_total 101.70}], totals {net 176.70, vat 35.34, carriage 75.00, gross 212.04}, confidence 0.96.
+
+### Example H — customer PO under a bare "Order No", surcharge as a coded row, courier row at zero, carriage under the totals
+```
+Invoice No 40725        Invoice Date 09/11/2026
+Order No   IPO/316208   Account Ref C0932
+Product Code and Name                 Quantity   Unit Price   Net Amount
+LT204  WARNING TAPE 5m x 35mm ROLL    6.0000     5.5000       33.00
+SUR02  PRODUCT SURCHARGE 5%           1.0000     1.6500       1.65
+S1     DHL PLEASE                     1.0000     0.0000       0.00
+Total Net Amount 34.65   Carriage Net 14.95   Total VAT Amount 9.92   Total 59.52
+```
+→ invoice_number `40725`, invoice_date `2026-11-09`, po_reference `IPO/316208` (bare "Order No" label, but the value is in the customer's PO format), line_items [{mpn `LT204`, description `WARNING TAPE 5m x 35mm ROLL`, quantity 6, unit_price 5.50, line_total 33.00}] (`SUR02` is a surcharge → a charge; `S1` is a courier instruction at 0.00 → dropped), charges [{`Carriage Net`, 14.95}, {`SUR02 PRODUCT SURCHARGE 5%`, 1.65}], totals {net 34.65, vat 9.92, carriage 16.60, gross 59.52}, confidence 0.93.
 
 ### Example E — Zoho-style PO number
 ```

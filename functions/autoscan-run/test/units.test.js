@@ -7,7 +7,7 @@ const { matchTotals, sumBilled } = require('../src/pipeline/match');
 const { candidatesFor } = require('../src/pipeline/resolvePo');
 const { detectMime, isSupported, estimatePageCount } = require('../src/util/mime');
 const { parseAmount } = require('../src/util/money');
-const { normaliseExtraction } = require('../src/claude/schema');
+const { normaliseExtraction, parsePrintedDate } = require('../src/claude/schema');
 const { createRateLimiter, mapWithConcurrency } = require('../src/util/limiter');
 const { buildBillPayload, billAdjustment, paymentTermsFromPo } = require('../src/pipeline/bill');
 const { loadConfig, assertRuntimeConfig } = require('../src/config');
@@ -113,6 +113,25 @@ test('paymentTermsFromPo matches by number of days, not label', () => {
   const terms = [{ payment_terms: 30, payment_terms_label: 'Net 30' }, { payment_terms: 30, payment_terms_label: 'Due end of next month' }];
   assert.deepEqual(paymentTermsFromPo({ payment_terms: 30, payment_terms_label: 'Due end of next month' }, terms), { days: 30, label: 'Due end of next month' });
   assert.equal(paymentTermsFromPo({}, terms), null);
+});
+test('paymentTermsFromPo: a special term returned as 0 days + its label is billed with the term the label names', () => {
+  const terms = [{ payment_terms: 0, payment_terms_label: 'Due on Receipt' }, { payment_terms: -3, payment_terms_label: 'Due end of next month' }, { payment_terms: 30, payment_terms_label: 'Net 30' }];
+  assert.deepEqual(paymentTermsFromPo({ payment_terms: 0, payment_terms_label: 'Due end of next month' }, terms), { days: -3, label: 'Due end of next month' });
+  assert.deepEqual(paymentTermsFromPo({ payment_terms: 0, payment_terms_label: 'Due on Receipt' }, terms), { days: 0, label: 'Due on Receipt' });
+  assert.deepEqual(paymentTermsFromPo({ payment_terms: -3, payment_terms_label: 'Due end of next month' }, terms), { days: -3, label: 'Due end of next month' });
+  assert.deepEqual(paymentTermsFromPo({ payment_terms: 45, payment_terms_label: 'Custom 45' }, terms), { days: 45, label: 'Custom 45' });
+});
+test('extraction: the date is converted from the printed text, the carriage is the sum of the listed charges', () => {
+  assert.equal(parsePrintedDate('01.10.2026'), '2026-10-01'); assert.equal(parsePrintedDate('27/10/26'), '2026-10-27'); assert.equal(parsePrintedDate('12 Nov 2026'), '2026-11-12');
+  assert.equal(parsePrintedDate('12-Nov-26'), '2026-11-12'); assert.equal(parsePrintedDate('November 12, 2026'), '2026-11-12'); assert.equal(parsePrintedDate('2026-01-14'), '2026-01-14');
+  assert.equal(parsePrintedDate('11/25/2026'), '2026-11-25'); assert.equal(parsePrintedDate('31/02/2026'), null); assert.equal(parsePrintedDate('soon'), null); assert.equal(parsePrintedDate(null), null);
+  const base = { invoice_number: '1', totals: { net: 28.88, vat: 8.77, carriage: 16.52, gross: 52.6 }, line_items: [], confidence: 0.9 };
+  const e = normaliseExtraction({ ...base, invoice_date: '2026-01-10', invoice_date_raw: '01.10.2026', charges: [{ description: 'Carriage Net', amount: 14.95 }, { description: 'SUR02 Surcharge', amount: 1.38 }, { description: 'S1', amount: 0 }] });
+  assert.equal(e.invoice_date, '2026-10-01'); assert.equal(e.totals.carriage, 16.33); assert.equal(e.charges.length, 2);
+  assert.match(e.notes, /model wrote 2026-01-10/); assert.match(e.notes, /16\.33 = 14\.95 \+ 1\.38 \(the model wrote 16\.52\)/);
+  const old = normaliseExtraction({ ...base, invoice_date: '2026-11-11' }); // no charges / raw date (older prompt): the model's values stand
+  assert.equal(old.invoice_date, '2026-11-11'); assert.equal(old.totals.carriage, 16.52); assert.deepEqual(old.charges, []); assert.equal(old.notes, null);
+  assert.equal(normaliseExtraction({ ...base, invoice_date: '2026-11-11', invoice_date_raw: 'see above', charges: [] }).invoice_date, '2026-11-11');
 });
 
 test('config defaults are safe (dry-run on)', () => {

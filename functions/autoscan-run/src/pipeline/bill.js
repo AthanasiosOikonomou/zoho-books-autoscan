@@ -78,6 +78,12 @@ function paymentTermsFromPo(po, terms) {
   if (!po) return null;
   if (po.payment_terms !== undefined && po.payment_terms !== null && po.payment_terms !== '') {
     const match = (terms || []).find((t) => Number(t.payment_terms) === Number(po.payment_terms) && (!po.payment_terms_label || t.payment_terms_label === po.payment_terms_label));
+    if (!match && po.payment_terms_label) {
+      // Books returns the special terms ("Due end of next month", defined as −3) on a PO as 0 days + the label. No term
+      // has that pair, but the label names exactly one term of the organisation: bill with that term's own number.
+      const byLabel = (terms || []).filter((t) => t.payment_terms_label === po.payment_terms_label);
+      if (byLabel.length === 1 && Number.isFinite(Number(byLabel[0].payment_terms))) return { days: Number(byLabel[0].payment_terms), label: byLabel[0].payment_terms_label };
+    }
     return { days: Number(po.payment_terms), label: match ? match.payment_terms_label : po.payment_terms_label || null };
   }
   return null;

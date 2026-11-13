@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { matchLines, normCode, poLineKeys, remainingQty } = require('../src/pipeline/lines');
+const { matchLines, normCode, poLineKeys, remainingQty, packUnits } = require('../src/pipeline/lines');
 const { vendorCarriageRule } = require('../src/pipeline/vendorRules');
 const { loadConfig } = require('../src/config');
 
@@ -111,4 +111,46 @@ test('totals guard: lines match but the invoice total does not add up (unread li
   const e = inv([{ mpn: 'AB-1', quantity: 2, unit_price: 10 }]); e.totals.gross = 60; // invoice says 60, lines say 24
   const r = matchLines({ extraction: e, po, vendorRule: ZERO, config: cfg() });
   assert.equal(r.ok, false); assert.equal(r.reason.code, 'TOTAL_MISMATCH'); assert.match(r.reason.text, /24\.00 .* 60\.00/);
+});
+
+// ---- findings from the second set of real documents (Nov 2026)
+test('poLineKeys: the Books MPN field arrives as part_number; an object item_code is not a key', () => {
+  assert.deepEqual(poLineKeys(poLine('1', null, 1, 1, { sku: 'S-1', item_code: {} }), { part_number: 'M-77', sku: 'S-1' }).map((x) => `${x.source}:${x.raw}`), ['mpn:M-77', 'sku:S-1']);
+  const r = matchLines({ extraction: inv([{ mpn: 'M-77', quantity: 2, unit_price: 5 }]), po: { line_items: [poLine('a', null, 2, 5)] }, items: new Map([['it-a', { part_number: 'M-77' }]]), vendorRule: ZERO, config: cfg() });
+  assert.equal(r.ok, true, JSON.stringify(r.problems)); assert.equal(r.matched[0].via, 'mpn');
+});
+test('zero-value row (courier name at 0.00) is ignored and noted, not LINE_UNMATCHED', () => {
+  const e = inv([{ mpn: 'AB-1', quantity: 6, unit_price: 5.5 }, { mpn: 'S1', d: 'COURIER PLEASE', quantity: 1, unit_price: 0 }]);
+  const r = matchLines({ extraction: e, po: { line_items: [poLine('a', 'AB-1', 6, 5.5)] }, vendorRule: ZERO, config: cfg() });
+  assert.equal(r.ok, true, JSON.stringify(r.problems)); assert.match(r.notes.join(' '), /S1.*zero-value row ignored/);
+});
+test('unit price quoted per another measure, or missing: priced from the line total', () => {
+  const po = { line_items: [poLine('a', 'QZ-20L', 1, 302.2)] };
+  const perLitre = { line_items: [{ mpn: 'QZ-20L', description: '20 L pack', quantity: 1, unit_price: 15.11, line_total: 302.2 }], totals: { net: 302.2, vat: 60.44, carriage: null, gross: 362.64 } };
+  const a = matchLines({ extraction: perLitre, po, vendorRule: ZERO, config: cfg() });
+  assert.equal(a.ok, true, JSON.stringify(a.problems)); assert.equal(a.rates.a, 302.2); assert.match(a.notes.join(' '), /unit price taken from the line total/);
+  const noPrice = { line_items: [{ mpn: 'QZ-20L', description: 'x', quantity: 1, unit_price: null, line_total: 302.2 }], totals: perLitre.totals };
+  const b = matchLines({ extraction: noPrice, po, vendorRule: ZERO, config: cfg() });
+  assert.equal(b.ok, true, JSON.stringify(b.problems)); assert.equal(b.rates.a, 302.2);
+  // a line discount: 5 × 10.00 less 10% = 45.00 → the price paid is 9.00, 10% under the PO → review
+  const disc = { line_items: [{ mpn: 'AB-1', description: 'x', quantity: 5, unit_price: 10, line_total: 45 }], totals: { net: 45, vat: 9, carriage: null, gross: 54 } };
+  const c = matchLines({ extraction: disc, po: { line_items: [poLine('a', 'AB-1', 5, 10)] }, vendorRule: ZERO, config: cfg() });
+  assert.equal(c.ok, false); assert.equal(c.reason.code, 'PRICE_MISMATCH'); assert.match(c.reason.text, /9\.00 vs PO 10\.00/);
+});
+test('pack ↔ each: same code, same money, whole pack size, units available → billed in PO units; otherwise the plain reading stands', () => {
+  // 6 EACH × 184.71 against 1 "box of 6" × 1108.26
+  const box = matchLines({ extraction: inv([{ mpn: '4481001', quantity: 6, unit_price: 184.71 }], 80), po: { line_items: [poLine('a', '4481001', 1, 1108.26), carriage(20)] }, vendorRule: IGNORE, config: cfg() });
+  assert.equal(box.ok, true, JSON.stringify(box.problems)); assert.deepEqual(box.quantities, { a: 1 }); assert.equal(box.rates.a, 1108.26); assert.equal(box.partial, false);
+  assert.equal(box.expected.gross, r2((1108.26 + 80) * 1.2)); assert.match(box.notes.join(' '), /billed as 1 PO unit/);
+  // the reverse: 1 box × 120.00 against 12 × 10.00
+  const each = matchLines({ extraction: inv([{ mpn: 'AB-1', quantity: 1, unit_price: 120 }]), po: { line_items: [poLine('a', 'AB-1', 12, 10)] }, vendorRule: ZERO, config: cfg() });
+  assert.equal(each.ok, true, JSON.stringify(each.problems)); assert.deepEqual(each.quantities, { a: 12 }); assert.equal(each.rates.a, 10);
+  // same money but the PO does not have the units (2 ordered, invoice 2 × double price) → a price increase, as before
+  const dbl = matchLines({ extraction: inv([{ mpn: 'AB-1', quantity: 2, unit_price: 50 }]), po: { line_items: [poLine('a', 'AB-1', 2, 25)] }, vendorRule: ZERO, config: cfg() });
+  assert.equal(dbl.ok, false); assert.equal(dbl.reason.code, 'PRICE_MISMATCH');
+  // not a whole pack size / not the same money → no conversion
+  assert.equal(packUnits({ qty: 5, lineTotal: 30, poRate: 10, available: 10 }), null); // 3 units from 5: factor 1.67
+  assert.equal(packUnits({ qty: 6, lineTotal: 1100, poRate: 1108.26, available: 1 }), null); // 8.26 short of one pack
+  assert.equal(packUnits({ qty: 6, lineTotal: 1108.26, poRate: 184.71, available: 6 }), null); // same units: nothing to convert
+  assert.deepEqual(packUnits({ qty: 6, lineTotal: 1108.26, poRate: 1108.26, available: 1 }), { units: 1, rate: 1108.26, factor: 6 });
 });

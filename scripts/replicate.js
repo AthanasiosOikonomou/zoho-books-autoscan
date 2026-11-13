@@ -11,6 +11,21 @@
  *       the PO is resolved exactly like the pipeline does, then PO + vendor + items + linked bills + taxes are
  *       saved to <dir>/_source/snapshot.json, with a readable <dir>/_source/summary.md.
  *
+ *   node scripts/replicate.js check [--dir …] [--carriage-rule Zero|Fixed|Ignore] [--carriage-tolerance n]
+ *       OFFLINE (no network). Runs the pipeline's own line matcher over the extractions in <dir>/_results and the
+ *       POs in the snapshot: what each document would do today. --carriage-rule replaces the vendors' own rule.
+ *
+ *   node scripts/replicate.js push [--dir …] [--carriage-rule Zero|Fixed|Ignore] [--carriage-tolerance n] [--plan]
+ *       Creates the snapshot's vendors, items and purchase orders in the SANDBOX (BOOKS_ORG_ID must equal
+ *       SEED_ALLOW_ORG_ID and differ from the snapshot's source): same PO numbers, dates, lines, prices, tax rate,
+ *       terms; items keep their SKU and Supplier Reference; vendors get their carriage rule (or --carriage-rule).
+ *       Idempotent: vendors by name, items by SKU/name, POs by number. Then upload the documents to the inbox.
+ *
+ *   node scripts/replicate.js verify [--dir …]
+ *       READ-ONLY on the sandbox, after the job has run: per document the bill (total vs invoice, date, due date,
+ *       PO link, lines, attachment), the PO's billed status and whether the file is still in the inbox
+ *       → <dir>/_source/verify.md.
+ *
  * Everything is written under <dir>, which must be git-ignored (./golden is): the snapshot is real business data.
  * Personal data is left out on purpose (addresses, contact persons, bank details are never copied).
  */
@@ -24,7 +39,9 @@ const { createTokenProvider } = fn('books/oauth');
 const { createBooksClient } = fn('books/client');
 const { resolvePurchaseOrder } = fn('pipeline/resolvePo');
 const { vendorCarriageRule } = fn('pipeline/vendorRules');
-const { poLineKeys, isCarriageLine, remainingQty } = fn('pipeline/lines');
+const { poLineKeys, isCarriageLine, remainingQty, matchLines } = fn('pipeline/lines');
+const { matchTotals } = fn('pipeline/match');
+const { customFieldDefs, customFieldValues } = require('./lib/custom-fields');
 
 const ROOT = path.join(__dirname, '..');
 const argv = process.argv.slice(2);
@@ -182,9 +199,232 @@ function summaryMd(snap, matching) {
   return md.join('\n');
 }
 
+const RULES = ['Zero', 'Fixed', 'Ignore'];
+function ruleOverride() {
+  const rule = opt('--carriage-rule');
+  if (!rule) return null;
+  if (!RULES.includes(rule)) { console.error(`--carriage-rule must be one of ${RULES.join(' | ')}`); process.exit(2); }
+  return { rule, tolerance: Number(opt('--carriage-tolerance') || 0), source: 'override' };
+}
+function readSnapshot(dir) {
+  const p = path.join(dir, '_source', 'snapshot.json');
+  if (!fs.existsSync(p)) { console.error(`No snapshot in ${path.relative(ROOT, dir)}: run "node scripts/replicate.js pull --org <organization_id>" first.`); process.exit(2); }
+  return JSON.parse(fs.readFileSync(p, 'utf8'));
+}
+function readExtraction(dir, file) {
+  const p = path.join(dir, '_results', `${file}.json`);
+  return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')).extraction : null;
+}
+const money = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : String(n));
+
+// ---------------------------------------------------------------- check (offline)
+function check() {
+  const dir = path.resolve(ROOT, opt('--dir') || 'golden/edge-2');
+  const snap = readSnapshot(dir);
+  const matching = { ...loadConfig(process.env).matching, carriageItemId: '' }; // the snapshot's POs carry the source's own carriage items (recognised by name)
+  const override = ruleOverride();
+  const items = new Map(Object.entries(snap.items).filter(([, it]) => !it.error));
+  console.log(`Offline check — POs as in organization ${snap.source_org_id} (${snap.pulled_at.slice(0, 16)}Z), carriage rule: ${override ? `${override.rule}${override.rule === 'Fixed' ? ` ±${override.tolerance}` : ''} for every vendor` : 'each vendor\'s own'}\n`);
+  let bill = 0; let review = 0;
+  for (const d of snap.documents) {
+    const e = readExtraction(dir, d.file);
+    const head = `${d.file.slice(0, 44).padEnd(44)}`;
+    if (!e) { console.log(`${head} no extraction (run scripts/golden.js)`); continue; }
+    const inv = `inv ${String(e.invoice_number).padEnd(12)} ${money(e.totals.gross).padStart(9)}`;
+    if (e.document_type !== 'invoice') { console.log(`${head} ${inv} → ${e.document_type === 'credit_note' ? 'credit note (not checked here)' : 'NOT_AN_INVOICE'}`); continue; }
+    if (!e.po_reference) { review++; console.log(`${head} ${inv} → NO_PO_REF`); continue; }
+    if (e.confidence < matching.confidenceThreshold) { review++; console.log(`${head} ${inv} → LOW_CONFIDENCE (${e.confidence})`); continue; }
+    if (!d.po_id) { review++; console.log(`${head} ${inv} → PO_NOT_FOUND ("${e.po_reference}")`); continue; }
+    const po = snap.purchase_orders[d.po_id];
+    const vendorRule = override || snap.vendors[po.vendor_id].carriage_rule;
+    const m = matchLines({ extraction: e, po, items, vendorRule, config: matching });
+    let verdict;
+    if (m.fallback) {
+      const t = matchTotals({ invoiceGross: e.totals.gross, poTotal: po.total, tolerance: matching.totalTolerance, compareAgainstRemaining: false });
+      verdict = t.ok ? `WOULD BILL ${money(e.totals.gross)} on totals (${m.reason.text})` : `TOTAL_MISMATCH (totals fallback: invoice ${money(t.invoiceGross)} vs PO ${money(t.poTotal)})`;
+      if (t.ok) bill++; else review++;
+    } else if (m.ok) { bill++; verdict = `WOULD BILL ${money(m.expected.gross)}${m.expected.diff ? ` (invoice ${money(m.expected.invoiceGross)}, ${money(m.expected.diff)} to adjustment)` : ''}${m.partial ? ' — partial' : ''}`; }
+    else { review++; verdict = m.reason.code; }
+    console.log(`${head} ${inv} PO ${String(po.purchaseorder_number).padEnd(9)} ${money(po.total).padStart(9)} [${vendorRule.rule}] → ${verdict}`);
+    for (const p of m.problems || []) console.log(`      - ${p.code}: ${p.text}`);
+    for (const n of m.notes || []) console.log(`      note: ${n}`);
+  }
+  console.log(`\n${bill} would bill · ${review} to review`);
+}
+
+// ---------------------------------------------------------------- push (sandbox)
+async function push() {
+  const dir = path.resolve(ROOT, opt('--dir') || 'golden/edge-2');
+  const snap = readSnapshot(dir);
+  const planOnly = argv.includes('--plan');
+  const override = ruleOverride();
+  const config = loadConfig(process.env);
+  const pos = Object.values(snap.purchase_orders).sort((a, b) => String(a.purchaseorder_number).localeCompare(String(b.purchaseorder_number), undefined, { numeric: true }));
+  console.log(`Plan: ${new Set(pos.map((p) => p.vendor_id)).size} vendor(s), ${new Set(pos.flatMap((p) => p.line_items.map((l) => l.item_id))).size} item(s), ${pos.length} purchase order(s)${override ? ` — carriage rule ${override.rule}${override.rule === 'Fixed' ? ` ±${override.tolerance}` : ''} on every vendor` : ''}`);
+  for (const p of pos) console.log(`  ${String(p.purchaseorder_number).padEnd(10)} ${String(p.vendor_name).padEnd(32)} ${p.date}  ${p.line_items.length} line(s)  total ${money(p.total)}`);
+  if (planOnly) return;
+  if (!config.books.orgId || config.books.orgId !== process.env.SEED_ALLOW_ORG_ID) { console.error('\nRefusing to write: BOOKS_ORG_ID must equal SEED_ALLOW_ORG_ID in .env (sandbox guard).'); process.exit(2); }
+  if (String(config.books.orgId) === String(snap.source_org_id)) { console.error('\nRefusing to write: the target organization is the snapshot\'s source.'); process.exit(2); }
+
+  const books = createBooksClient({ config: config.books, tokenProvider: createTokenProvider(config.books), logger: createLogger({ level: 'warn' }) });
+  const org = (await books.listOrganizations()).find((o) => String(o.organization_id) === String(config.books.orgId)) || {};
+  console.log(`\nTarget (sandbox): ${config.books.orgId} ${org.name || ''}`);
+  const orgInfo = { id: config.books.orgId, name: org.name || '', sandbox: !!org.is_sandbox_org };
+  const vendorDefs = await customFieldDefs(books, 'vendor', orgInfo);
+  const itemDefs = await customFieldDefs(books, 'item', orgInfo);
+  const m = config.matching;
+  const out = { target_org_id: String(config.books.orgId), source_org_id: snap.source_org_id, pushed_at: new Date().toISOString(), vendors: {}, items: {}, pos: {} };
+
+  // lookups in the target
+  const taxes = (await books.request('/settings/taxes')).taxes || [];
+  async function taxFor(pct) {
+    const p = Number(pct);
+    if (!Number.isFinite(p)) return null;
+    let t = taxes.find((x) => Number(x.tax_percentage) === p && (x.tax_type === 'tax' || !x.tax_type));
+    if (!t && p > 0) { t = (await books.request('/settings/taxes', { method: 'POST', json: { tax_name: `VAT ${p}%`, tax_percentage: p, tax_type: 'tax' } })).tax; taxes.push(t); console.log(`+ tax ${t.tax_name} (${t.tax_id})`); }
+    return t ? t.tax_id : null;
+  }
+  const accounts = new Map();
+  try { for (const a of (await books.request('/chartofaccounts')).chartofaccounts || []) accounts.set(String(a.account_name).trim().toLowerCase(), a.account_id); } catch (err) { console.log(`! chart of accounts not readable (${err.message}) — lines use the items' default accounts`); }
+  const terms = await books.getPaymentTerms();
+  const warnedTerms = new Set();
+  const termsFor = (label, days) => {
+    const src = (snap.payment_terms || []).find((t) => t.payment_terms_label === label); // the source's own definition of that label (e.g. −3 = end of next month)
+    const want = src ? Number(src.payment_terms) : Number(days);
+    if (label && !terms.some((t) => t.payment_terms_label === label) && !warnedTerms.has(label) && warnedTerms.add(label)) console.log(`! payment terms "${label}" are not defined in this organization (Settings → Preferences → Payment Terms) — sent as ${want} / "${label}" anyway`);
+    return Number.isFinite(want) ? { payment_terms: want, payment_terms_label: label || undefined } : {};
+  };
+
+  // vendors
+  for (const vid of [...new Set(pos.map((p) => p.vendor_id))]) {
+    const v = snap.vendors[vid];
+    const name = v.contact_name;
+    let c = ((await books.request('/contacts', { query: { contact_name: name, contact_type: 'vendor' } })).contacts || []).find((x) => x.contact_name === name);
+    if (!c) {
+      const body = { contact_name: name, company_name: v.company_name || name, contact_type: 'vendor' };
+      try { c = (await books.request('/contacts', { method: 'POST', json: { ...body, ...termsFor(v.payment_terms_label, v.payment_terms) } })).contact; }
+      catch (err) { console.log(`! vendor ${name}: ${err.message} — created without payment terms`); c = (await books.request('/contacts', { method: 'POST', json: body })).contact; }
+      console.log(`+ vendor ${name} (${c.contact_id})`);
+    } else console.log(`= vendor ${name} (${c.contact_id})`);
+    const rule = override || (v.carriage_rule && v.carriage_rule.source === 'vendor' ? v.carriage_rule : null);
+    if (rule) {
+      const full = (await books.request(`/contacts/${c.contact_id}`)).contact || c;
+      const cf = customFieldValues(full.custom_fields, { [m.carriageRuleLabel.toLowerCase()]: rule.rule, [m.carriageToleranceLabel.toLowerCase()]: rule.tolerance || 0 }, vendorDefs);
+      if (cf.missing.length) console.log(`! vendor custom field(s) not found: ${cf.missing.join(', ')}`);
+      if (cf.changes.length) {
+        try { await books.request(`/contacts/${c.contact_id}`, { method: 'PUT', json: { custom_fields: cf.changes } }); console.log(`  ~ carriage ${rule.rule}${rule.rule === 'Fixed' ? ` ±${rule.tolerance}` : ''}`); }
+        catch (err) { console.log(`! ${name}: could not write the carriage rule (${err.message}) — set it in the UI: ${rule.rule}`); }
+      } else console.log(`  = carriage ${rule.rule}${rule.rule === 'Fixed' ? ` ±${rule.tolerance}` : ''}`);
+    } else console.log(`  = no carriage rule on the source vendor → left as it is here (unset = ${m.defaultCarriageRule})`);
+    out.vendors[vid] = { contact_id: c.contact_id, name, carriage_rule: rule ? rule.rule : null };
+  }
+
+  // items (by SKU, then by name)
+  const srLabel = m.supplierRefLabel.toLowerCase();
+  for (const p of pos) for (const l of p.line_items) {
+    if (!l.item_id || out.items[l.item_id]) continue;
+    const src = snap.items[l.item_id] && !snap.items[l.item_id].error ? snap.items[l.item_id] : { name: l.name, sku: l.sku, purchase_rate: l.rate, rate: l.rate, product_type: l.product_type, custom_fields: [] };
+    const sku = src.sku || l.sku || '';
+    let it = sku ? ((await books.request('/items', { query: { sku } })).items || []).find((x) => String(x.sku) === String(sku)) : null;
+    if (!it) it = ((await books.request('/items', { query: { name: src.name } })).items || []).find((x) => x.name === src.name);
+    if (!it) {
+      const body = { name: src.name, sku: sku || undefined, rate: Number(src.rate) || Number(l.rate) || 0, purchase_rate: Number(src.purchase_rate) || Number(l.rate) || 0, product_type: src.product_type === 'service' ? 'service' : 'goods', item_type: 'sales_and_purchases', purchase_description: src.purchase_description || undefined };
+      it = (await books.request('/items', { method: 'POST', json: body })).item;
+      console.log(`+ item ${sku.padEnd(14)} ${src.name.slice(0, 60)} (${it.item_id})`);
+    } else console.log(`= item ${sku.padEnd(14)} ${String(it.name).slice(0, 60)} (${it.item_id})`);
+    const ref = ((src.custom_fields || []).find((f) => String(f.label || '').trim().toLowerCase() === srLabel) || {}).value;
+    if (ref) {
+      const full = (await books.request(`/items/${it.item_id}`)).item || it;
+      const cf = customFieldValues(full.custom_fields, { [srLabel]: ref }, itemDefs);
+      if (cf.missing.length) console.log(`! item custom field "${m.supplierRefLabel}" not found in this organization`);
+      if (cf.changes.length) {
+        try { await books.request(`/items/${it.item_id}`, { method: 'PUT', json: { custom_fields: cf.changes } }); console.log(`  ~ ${m.supplierRefLabel} ${ref}`); }
+        catch (err) { console.log(`! ${src.name}: could not write ${m.supplierRefLabel} (${err.message})`); }
+      }
+    } else if (!isCarriageLine(l, null)) console.log(`  ! no ${m.supplierRefLabel} on the source item — left empty here too (the line cannot be matched by code)`);
+    out.items[l.item_id] = { item_id: it.item_id, sku, name: src.name, supplier_reference: ref || null };
+  }
+
+  // purchase orders (same number; never touched when they already exist)
+  for (const p of pos) {
+    const number = String(p.purchaseorder_number);
+    const hit = (await books.searchPurchaseOrders({ purchaseorder_number: number })).find((x) => String(x.purchaseorder_number) === number);
+    let po = hit ? await books.getPurchaseOrder(hit.purchaseorder_id) : null;
+    if (po) console.log(`= PO ${number} exists (${po.status}/${po.billed_status || '-'}) total ${money(po.total)} — left as it is`);
+    else {
+      const line_items = [];
+      for (const l of [...p.line_items].sort((a, b) => (a.item_order || 0) - (b.item_order || 0))) {
+        const li = { item_id: out.items[l.item_id] ? out.items[l.item_id].item_id : undefined, name: l.name, description: l.description || undefined, quantity: l.quantity, rate: l.rate };
+        const tax = await taxFor(l.tax_percentage); if (tax) li.tax_id = tax;
+        const acct = accounts.get(String(l.account_name || '').trim().toLowerCase()); if (acct) li.account_id = acct;
+        line_items.push(li);
+        if (Number(l.quantity_billed) > 0) console.log(`! PO ${number} "${l.name}": ${l.quantity_billed} already billed in the source — NOT reproduced here (create that bill by hand if the test needs it)`);
+      }
+      const body = { purchaseorder_number: number, vendor_id: out.vendors[p.vendor_id].contact_id, date: p.date, reference_number: p.reference_number || undefined, is_inclusive_tax: !!p.is_inclusive_tax, notes: 'AutoScan test PO [replicated]', line_items, ...termsFor(p.payment_terms_label, p.payment_terms) };
+      try {
+        po = (await books.request('/purchaseorders', { method: 'POST', query: { ignore_auto_number_generation: true }, json: body })).purchaseorder;
+      } catch (err) { console.log(`✗ PO ${number}: ${err.message}`); continue; }
+      if (p.status && p.status !== 'draft' && String(po.status).toLowerCase() === 'draft') {
+        try { await books.request(`/purchaseorders/${po.purchaseorder_id}/status/open`, { method: 'POST' }); po = await books.getPurchaseOrder(po.purchaseorder_id); }
+        catch (err) { console.log(`! PO ${number}: could not mark it open (${err.message}) — open it in the UI`); }
+      }
+      const same = Math.abs(Number(po.total) - Number(p.total)) < 0.011;
+      console.log(`+ PO ${number} ${po.vendor_name} ${po.status} total ${money(po.total)}${same ? '' : `  ! source total ${money(p.total)}`} terms ${po.payment_terms}/"${po.payment_terms_label || ''}"`);
+    }
+    out.pos[p.purchaseorder_id] = { purchaseorder_id: po.purchaseorder_id, number, total: po.total, status: po.status, vendor_id: po.vendor_id };
+  }
+
+  fs.writeFileSync(path.join(dir, '_source', 'push-output.json'), JSON.stringify(out, null, 2));
+  const files = snap.documents.map((d) => d.file);
+  console.log(`\nBooks calls: ${books.stats.calls}\n→ ${path.relative(ROOT, path.join(dir, '_source', 'push-output.json'))}\n\nNext: upload the ${files.length} document(s) of ${path.relative(ROOT, dir)} to this organization's Documents inbox, run the job, then: node scripts/replicate.js verify`);
+}
+
+// ---------------------------------------------------------------- verify (sandbox, read-only)
+async function verify() {
+  const dir = path.resolve(ROOT, opt('--dir') || 'golden/edge-2');
+  const snap = readSnapshot(dir);
+  const config = loadConfig(process.env);
+  const books = createBooksClient({ config: config.books, tokenProvider: createTokenProvider(config.books), logger: createLogger({ level: 'warn' }), fetchImpl: readOnlyFetch });
+  const org = (await books.listOrganizations()).find((o) => String(o.organization_id) === String(config.books.orgId)) || {};
+  const inbox = await books.listAllInboxDocuments();
+  const md = [`# Verify — organization ${config.books.orgId} ${org.name || ''} — ${new Date().toISOString().slice(0, 16)}Z`, '', `Inbox: ${inbox.length} document(s)`, ''];
+  md.push('| File | Invoice | Gross | PO | PO status | Bill | Bill total | = invoice | Date | Due | Terms | Linked to PO | Attachment | Still in inbox |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+  const details = [];
+  for (const d of snap.documents) {
+    const e = readExtraction(dir, d.file) || { totals: {} };
+    const inInbox = inbox.filter((x) => String(x.file_name || '').toLowerCase() === d.file.toLowerCase()).length;
+    const srcPo = d.po_id ? snap.purchase_orders[d.po_id] : null;
+    const row = [d.file, e.invoice_number || '', money(e.totals.gross)];
+    if (!srcPo) { md.push(`| ${row.join(' | ')} | — (no PO in the source) | | | | | | | | | | ${inInbox || 'no'} |`); continue; }
+    const number = String(srcPo.purchaseorder_number);
+    const hit = (await books.searchPurchaseOrders({ purchaseorder_number: number })).find((x) => String(x.purchaseorder_number) === number);
+    if (!hit) { md.push(`| ${row.join(' | ')} | ${number} **missing here** | | | | | | | | | | ${inInbox || 'no'} |`); continue; }
+    const po = await books.getPurchaseOrder(hit.purchaseorder_id);
+    const found = e.invoice_number ? (await books.searchBills({ vendor_id: po.vendor_id, bill_number: e.invoice_number })).find((b) => String(b.bill_number).toLowerCase() === String(e.invoice_number).toLowerCase()) : null;
+    if (!found) { md.push(`| ${row.join(' | ')} | ${number} | ${po.status}/${po.billed_status || '-'} | none | | | | | | | | ${inInbox || 'no'} |`); continue; }
+    const b = await books.getBill(found.bill_id);
+    const poIds = [...(b.purchaseorder_ids || []), ...(b.purchaseorders || []).map((x) => x.purchaseorder_id)].map(String);
+    const poLineIds = new Set((po.line_items || []).map((l) => String(l.line_item_id)));
+    const linked = poIds.includes(String(po.purchaseorder_id)) || (b.line_items || []).some((l) => poLineIds.has(String(l.purchaseorder_item_id)));
+    const att = (b.documents || []).length || (b.attachment_name ? 1 : 0);
+    const eq = Math.abs(Number(b.total) - Number(e.totals.gross)) < 0.005;
+    md.push(`| ${row.join(' | ')} | ${number} | ${po.status}/${po.billed_status || '-'} | ${b.bill_number} (${b.status}) | ${money(b.total)} | ${eq ? 'yes' : `**NO** (${money(Number(b.total) - Number(e.totals.gross))})`} | ${b.date}${b.date === e.invoice_date ? '' : ` **≠ ${e.invoice_date}**`} | ${b.due_date} | ${b.payment_terms}/"${b.payment_terms_label || ''}" | ${linked ? 'yes' : '**NO**'} | ${att || '**none**'} | ${inInbox || 'no'} |`);
+    details.push('', `## ${b.bill_number} — ${b.vendor_name} — PO ${number}`, '', `sub ${money(b.sub_total)} + tax ${money(b.tax_total)}${Number(b.adjustment) ? ` + adjustment ${money(b.adjustment)} ("${b.adjustment_description || ''}")` : ''} = ${money(b.total)} · invoice ${money(e.totals.gross)} · PO was ${money(po.total)}`, '');
+    for (const l of b.line_items || []) details.push(`- ${l.quantity} × ${String(l.name || l.description || '').slice(0, 70)} @ ${l.rate} = ${money(l.item_total)}${l.purchaseorder_item_id ? '' : '  (not a PO line)'} · ${l.account_name || ''}`);
+    details.push('', `PO lines after the bill: ${(po.line_items || []).map((l) => `${String(l.name).slice(0, 28)} ${l.quantity_billed || 0}/${l.quantity}`).join(' · ')}`);
+  }
+  const outPath = path.join(dir, '_source', 'verify.md');
+  fs.writeFileSync(outPath, [...md, ...details, ''].join('\n'));
+  console.log([...md, ...details].join('\n'));
+  console.log(`\nBooks calls (all GET): ${books.stats.calls}\n→ ${path.relative(ROOT, outPath)}`);
+}
+
 (async () => {
   const cmd = argv[0];
   if (cmd === 'pull') return pull();
-  console.error('Usage: node scripts/replicate.js pull --org <organization_id> [--dir golden/edge-2]');
+  if (cmd === 'check') return check();
+  if (cmd === 'push') return push();
+  if (cmd === 'verify') return verify();
+  console.error('Usage: node scripts/replicate.js pull --org <organization_id> | check | push | verify   [--dir golden/edge-2] [--carriage-rule Zero|Fixed|Ignore] [--carriage-tolerance n] [--plan]');
   process.exit(2);
 })().catch((err) => { console.error(err.message); process.exit(1); });

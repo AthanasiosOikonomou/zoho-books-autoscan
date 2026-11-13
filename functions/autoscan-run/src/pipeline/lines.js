@@ -4,7 +4,7 @@
  * Phase 2 — line-level matching between the invoice lines Claude read and the PO lines in Books.
  *
  * Keys per PO line (any may be missing): the item custom field "Supplier Reference" (the supplier's own
- * code, printed on the PO), the item's MPN, the item SKU, the PO line item_code. Codes are compared
+ * code, printed on the PO), the item's MPN (`part_number` in the API), the item SKU, the PO line item_code. Codes are compared
  * normalised: case-insensitive, with spaces, dots, dashes, slashes and underscores removed, so
  * `ZK410-KIT` == `ZK410KIT` and `7.204.15P` == `7204 15P`.
  *
@@ -24,12 +24,16 @@ function normCode(s) {
 /** Keys of one PO line, in order of preference. `item` (optional) is the Books item for MPN/SKU fallback. */
 function poLineKeys(line, item, { supplierRefLabel = 'Supplier Reference' } = {}) {
   const keys = [];
-  const push = (v, source) => { const n = normCode(v); if (n && !keys.some((k) => k.n === n)) keys.push({ n, raw: String(v), source }); };
+  const push = (v, source) => {
+    if (v === null || v === undefined || typeof v === 'object') return; // some organizations return item_code as {}
+    const n = normCode(v); if (n && !keys.some((k) => k.n === n)) keys.push({ n, raw: String(v), source });
+  };
   const want = supplierRefLabel.trim().toLowerCase();
   for (const f of line.item_custom_fields || []) if (String(f.label || '').trim().toLowerCase() === want) push(f.value, 'supplier_reference');
   if (item) {
     for (const f of item.custom_fields || []) if (String(f.label || '').trim().toLowerCase() === want) push(f.value, 'supplier_reference');
     push(item.mpn, 'mpn');
+    push(item.part_number, 'mpn'); // the item's "MPN" field in the Books UI is `part_number` in the API
     push(item.sku, 'sku');
   }
   push(line.sku, 'sku');
@@ -40,6 +44,28 @@ function poLineKeys(line, item, { supplierRefLabel = 'Supplier Reference' } = {}
 function isCarriageLine(line, carriageItemId) {
   if (carriageItemId && String(line.item_id) === String(carriageItemId)) return true;
   return CARRIAGE_RE.test(`${line.name || ''} ${line.description || ''}`);
+}
+
+function numOrNaN(v) { return v === null || v === undefined || v === '' ? NaN : Number(v); }
+function round4(n) { return Math.round((n + Number.EPSILON) * 10000) / 10000; }
+
+/**
+ * Pack ↔ each. The invoice line and the PO line carry the same code but count different units (6 EACH at 184.71
+ * against 1 "box of 6" at 1108.26). Accepted only when it is the same money and a whole pack size, and the PO still
+ * has those units: the invoice line total is a whole number of PO units to the penny (per unit), invoice quantity and
+ * PO units differ by a whole factor ≥ 2, and the units are available. Anything else keeps the plain reading, which
+ * then reports QTY_EXCEEDS / PRICE_MISMATCH as before.
+ * @returns {{units:number, rate:number, factor:number}|null}
+ */
+function packUnits({ qty, lineTotal, poRate, available, priceAbs = 0.01 }) {
+  if (!(qty > 0) || !(poRate > 0) || !Number.isFinite(lineTotal) || !(lineTotal > 0)) return null;
+  const units = Math.round(lineTotal / poRate);
+  if (units < 1 || units === qty) return null;
+  if (Math.abs(lineTotal - units * poRate) > priceAbs * units + 1e-9) return null;
+  const factor = qty > units ? qty / units : units / qty;
+  if (Math.abs(factor - Math.round(factor)) > 1e-9 || Math.round(factor) < 2) return null;
+  if (units > available + 1e-9) return null;
+  return { units, rate: round4(lineTotal / units), factor: Math.round(factor) };
 }
 
 function remainingQty(line) {
@@ -79,7 +105,14 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
   }
 
   // ---- product lines
-  const invLines = (extraction.line_items || []).filter((l) => Number(l.quantity) > 0 || Number(l.line_total) > 0);
+  // A row printed at 0.00 (a courier name, a delivery instruction: 1 × 0.00) bills nothing: it is noted, never matched.
+  const isZeroValue = (l) => l.line_total !== null && l.line_total !== undefined && Number(l.line_total) === 0 && !(Number(l.unit_price) > 0);
+  const invLines = [];
+  for (const l of extraction.line_items || []) {
+    if (!(Number(l.quantity) > 0 || Number(l.line_total) > 0)) continue;
+    if (isZeroValue(l)) { notes.push(`"${l.mpn || l.description}": zero-value row ignored`); continue; }
+    invLines.push(l);
+  }
   const matched = []; // { inv, po, qty, rate, poRate, priceDiffPct }
   const byPo = new Map(); // po line_item_id → accumulated qty
   for (const inv of invLines) {
@@ -96,12 +129,27 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
       problems.push({ code: 'LINE_UNMATCHED', text: `"${inv.mpn || inv.description}" (qty ${inv.quantity}) is not on the PO${keyless.length ? ` — PO lines without a ${cfg.supplierRefLabel}/MPN: ${keyless.slice(0, 3).join('; ')}` : ''}` });
       continue;
     }
-    const qty = Number(inv.quantity) || 0;
-    const rate = Number.isFinite(Number(inv.unit_price)) ? Number(inv.unit_price) : (qty ? round2(Number(inv.line_total) / qty) : NaN);
+    let qty = Number(inv.quantity) || 0;
+    const label = inv.mpn || hit.name;
+    const lineTotal = numOrNaN(inv.line_total);
+    let rate = numOrNaN(inv.unit_price);
+    // The line total is what is paid. A printed price that does not multiply up to it is quoted per another measure
+    // (per litre, per 100, before a line discount) or was not printed at all: the unit price comes from the line total.
+    if (qty > 0 && Number.isFinite(lineTotal) && (!Number.isFinite(rate) || Math.abs(round2(rate * qty) - lineTotal) > Math.max(0.02, 0.005 * qty))) {
+      const implied = round4(lineTotal / qty);
+      if (Number.isFinite(rate)) notes.push(`${label}: printed price ${rate.toFixed(2)} × ${qty} is not the line total ${lineTotal.toFixed(2)} — unit price taken from the line total (${implied.toFixed(2)})`);
+      rate = implied;
+    }
     const poRate = Number(hit.rate);
     const prev = byPo.get(hit.line_item_id) || 0;
-    byPo.set(hit.line_item_id, round2(prev + qty));
     const remaining = remainingQty(hit);
+    // Pack ↔ each: same code, but the supplier counts single units where the PO line is a pack (or the reverse).
+    const pack = packUnits({ qty, lineTotal, poRate, available: round2(remaining - prev), priceAbs: cfg.priceAbs });
+    if (pack) {
+      notes.push(`${label}: invoiced ${qty} × ${Number.isFinite(rate) ? rate.toFixed(2) : '?'} = ${lineTotal.toFixed(2)}, the PO counts it ${pack.factor} to a ${qty > pack.units ? 'pack' : 'unit'} (${pack.units} × ${poRate.toFixed(2)}) — billed as ${pack.units} PO unit${pack.units === 1 ? '' : 's'}`);
+      qty = pack.units; rate = pack.rate;
+    }
+    byPo.set(hit.line_item_id, round2(prev + qty));
     if (round2(prev + qty) > remaining + 1e-9) {
       problems.push({ code: 'QTY_EXCEEDS', text: `${inv.mpn || hit.name}: invoiced ${round2(prev + qty)} but only ${remaining} remaining on the PO (ordered ${hit.quantity}, billed ${hit.quantity_billed || 0})` });
     }
@@ -111,7 +159,6 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
       const pct = `${d > 0 ? '+' : ''}${(d / poRate * 100).toFixed(1)}%`;
       const tolDown = Math.max(cfg.priceAbs, round2(poRate * cfg.pricePctDown / 100));
       const tolUp = Math.max(cfg.priceAbs, round2(poRate * cfg.pricePctUp / 100));
-      const label = inv.mpn || hit.name;
       if (d > tolUp) {
         priceOk = false;
         problems.push({ code: 'PRICE_MISMATCH', text: `${label}: unit price ${rate.toFixed(2)} vs PO ${poRate.toFixed(2)} (${pct}; ${cfg.pricePctUp > 0 ? `allowed up to +${cfg.pricePctUp}%` : 'price increases always go to review'})` });
@@ -160,4 +207,4 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
   };
 }
 
-module.exports = { matchLines, normCode, poLineKeys, isCarriageLine, remainingQty };
+module.exports = { matchLines, normCode, poLineKeys, isCarriageLine, remainingQty, packUnits };
