@@ -8,6 +8,7 @@
  *   node scripts/golden.js                 → every PDF/JPG/PNG in ./golden (results cached by file hash)
  *   node scripts/golden.js --file "x.pdf"  → one file
  *   node scripts/golden.js --force         → re-read even if a cached result exists (costs AI calls)
+ *   node scripts/golden.js --dir golden/edge-2 → another folder of documents (results under <dir>/_results)
  *
  * Output (git-ignored, under golden/_results):
  *   <file>.json      the full extraction + usage
@@ -33,7 +34,8 @@ const { candidatesFor } = fn('pipeline/resolvePo');
   const force = args.includes('--force');
   const config = loadConfig(process.env);
   if (!config.claude.apiKey) { console.error('ANTHROPIC_API_KEY missing in .env'); process.exit(2); }
-  const dir = path.join(__dirname, '..', 'golden');
+  const dirArg = args.includes('--dir') ? args[args.indexOf('--dir') + 1] : null;
+  const dir = dirArg ? path.resolve(path.join(__dirname, '..'), dirArg) : path.join(__dirname, '..', 'golden');
   const outDir = path.join(dir, '_results');
   fs.mkdirSync(outDir, { recursive: true });
   const logger = createLogger({ level: process.env.LOG_LEVEL || 'warn' });
