@@ -4,9 +4,9 @@ Zoho Books supplier-invoice → bill automation, running on **Zoho Catalyst** (E
 
 > Status (5 Nov 2026): **Phase 1 and Phase 2 deployed and proven** on the client's Catalyst project (Development env) against the Books sandbox — scan → read → match → bill (at the invoice total) → report, automatic reconciliation, de-duplication, **credit notes → vendor credits** (applied to the bill, PDF attached), the **once-a-day HTML digest**, and **line-by-line matching** (Supplier Reference / MPN / SKU, partial deliveries, vendor carriage rules) — all verified live. The 13-document golden set of real supplier invoices reads correctly. The digest is emailed from the client's own mailbox (SMTP). Production stays in **dry-run** until UAT sign-off.
 >
-> Update (16 Nov 2026): a second set of real supplier invoices was run end to end and the client's rulings on it are built and unit-tested — carriage at or below the PO, product surcharges as part of the product price, value matching for items without a supplier code (see *Phase 2* below and `docs/requirements.md`). Sandbox proof of the new scenarios is the next step.
+> Update (16 Nov 2026): a second set of real supplier invoices was run end to end and the client's rulings on it are built and unit-tested — carriage at or below the PO, product surcharges as part of the product price, value matching for items without a supplier code (see *Phase 2* below and `docs/requirements.md`). All nine new sandbox scenarios gave the expected outcome on Catalyst Development the same day: carriage below the PO billed on the PO carriage line, goods invoice without carriage followed by a carriage-only invoice, a second shipment's carriage held, a surcharge inside the PO price billed at the invoice total, a surcharge on top held as a price increase, an item without a supplier code billed by value, two same-price candidates held.
 
-**Next:** sandbox run of the new scenarios → UAT with finance → production promotion.
+**Next:** UAT with finance → production promotion.
 
 ## What it does
 
