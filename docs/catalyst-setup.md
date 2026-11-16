@@ -42,7 +42,7 @@ Console → the project → Development → **Data Store → New Table**. Column
 | pages | Integer | |
 | status | Text, max 30 | NEW / BILLED / EXCEPTION / DUPLICATE / BILLED_NO_ATTACH / WOULD_BILL / PROCESSING |
 | reason_code | Text, max 40 | |
-| reason_text | Text, max 1000 | |
+| reason_text | Text, max 1000 | exception detail; on a billed row (empty reason_code): the billing notes shown in the daily digest |
 | attempts | Integer | |
 | first_seen | DateTime | UTC |
 | last_attempt | DateTime | UTC |

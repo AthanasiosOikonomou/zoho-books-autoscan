@@ -108,6 +108,16 @@ function loadConfig(rawEnv = process.env, { environment } = {}) {
       carriageRuleLabel: env.CARRIAGE_RULE_LABEL || 'Carriage Rule', // vendor custom fields
       carriageToleranceLabel: env.CARRIAGE_TOLERANCE_LABEL || 'Carriage Tolerance',
       defaultCarriageRule: env.DEFAULT_CARRIAGE_RULE || 'Zero',
+      // Client rules (16 Nov 2026). Carriage invoiced at or below the PO's carriage is accepted under every vendor rule
+      // and billed as invoiced (none invoiced → the PO's carriage line stays open for a separate carriage invoice); the
+      // vendor rule decides only about carriage ABOVE the PO. false = the rule applies in both directions, as before.
+      carriageBelowPoOk: bool(env.CARRIAGE_BELOW_PO_OK, true),
+      // A product surcharge ("PRODUCT SURCHARGE 5%", "Order Surcharge") is part of the product price: spread over the
+      // product lines before the price check. false = it counts as carriage, as before.
+      surchargeInPrice: bool(env.SURCHARGE_IN_PRICE, true),
+      // An invoice line with no code match may take the ONE open PO line without a supplier code that has the same
+      // unit price and enough quantity (descriptions must share a word); anything ambiguous goes to review.
+      lineValueFallback: bool(env.LINE_VALUE_FALLBACK, true),
     },
 
     // --- Queue / run behaviour ---------------------------------------------

@@ -290,6 +290,14 @@ test('daily report: KPIs, sections, links and the unlinked-credit warning', () =
   const dry = buildDailyReport({ day, docs: docs.map((d) => (d.status === 'BILLED' ? { ...d, status: 'WOULD_BILL' } : d)), open, runs, config: loadConfig({ BOOKS_ORG_ID: 'org' }) });
   assert.match(dry.subject, /DRY-RUN/); assert.ok(dry.html.includes('Would be billed today'));
 });
+test('daily report: a billed document shows the note stored with it (matched by value → the code to add)', () => {
+  const { day, docs, open, runs } = dailyFixture();
+  docs[0] = { ...docs[0], reason_code: null, reason_text: 'SN1200WH: no Supplier Reference / MPN on PO line "Stair Nosing" — matched by value (22 × 5.80); add Supplier Reference SN1200WH to the item' };
+  const r = buildDailyReport({ day, docs, open, runs, config: loadConfig({ BOOKS_ORG_ID: 'org', DRY_RUN: 'false' }) });
+  assert.ok(r.html.includes('Note: SN1200WH: no Supplier Reference / MPN on PO line &quot;Stair Nosing&quot; — matched by value'), 'note under the bill row');
+  assert.ok(r.text.includes('| note: SN1200WH: no Supplier Reference'));
+  assert.equal(r.counts.attention, 2, 'a note is not an exception');
+});
 test('daily trigger: not before the hour, once per day, marker in run_log, force/explicit override', async () => {
   const store = new JsonFileStore();
   const { docs, open } = dailyFixture();

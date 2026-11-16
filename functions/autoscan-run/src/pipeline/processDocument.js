@@ -14,8 +14,20 @@ const { detectMime, isSupported, estimatePageCount } = require('../util/mime');
 const { sha256 } = require('../util/hash');
 const { estimateCostUsd } = require('../claude/extractor');
 
-// Reasons that come from the *reading* of the document: when the prompt changes, read again.
-const EXTRACTION_REASONS = new Set(['NO_PO_REF', 'LOW_CONFIDENCE', 'PO_NOT_FOUND', 'NOT_AN_INVOICE', 'CREDIT_NOTE', 'AI_ERROR', 'UNSUPPORTED_FILE']);
+// Reasons that can come from the *reading* of the document: when the prompt changes, read again (once — the new prompt
+// version is stored with the new extraction). The matching reasons are in the list because a misread line, quantity,
+// price or charge shows up as exactly these; a parked document would otherwise keep its old reading for the whole
+// reconciliation window. Cost: one AI call per parked document per prompt change.
+const EXTRACTION_REASONS = new Set([
+  'NO_PO_REF', 'LOW_CONFIDENCE', 'PO_NOT_FOUND', 'NOT_AN_INVOICE', 'CREDIT_NOTE', 'AI_ERROR', 'UNSUPPORTED_FILE',
+  'LINE_UNMATCHED', 'CARRIAGE_MISMATCH', 'PRICE_MISMATCH', 'QTY_EXCEEDS', 'TOTAL_MISMATCH',
+]);
+
+/** Notes of a clean outcome (billed at a lower price, matched by value, carriage left open…) are kept in `reason_text`
+ *  with an empty `reason_code`, so the daily digest — which reads the state table, not the run — can show them. */
+function noteOf(result) {
+  return result.note ? { reason_code: null, reason_text: String(result.note).slice(0, 900), action: null, retry: false } : null;
+}
 
 /**
  * Process ONE inbox document end to end. Never throws: every outcome is a
@@ -144,8 +156,9 @@ async function processDocument(ctx, doc, prior) {
     }
 
     // ---------------------------------------------------------------- 4. match
-    //    Phase 2 (PHASE2_ENABLED): invoice lines ↔ PO lines by Supplier Reference / MPN / SKU, quantities ≤ remaining,
-    //    prices within tolerance, carriage per vendor rule → partial bill at the invoice prices.
+    //    Phase 2 (PHASE2_ENABLED): invoice lines ↔ PO lines by Supplier Reference / MPN / SKU (or by value when the item
+    //    has no supplier code), quantities ≤ remaining, prices within tolerance (a product surcharge is part of the
+    //    price), carriage at or below the PO or within the vendor rule → partial bill at the invoice prices.
     //    Phase 1 (or Phase 2 fallback when the PO lines carry no codes): invoice total vs PO total / remaining.
     let lineMatch = null;
     if (config.matching.phase2Enabled) {
@@ -181,7 +194,7 @@ async function processDocument(ctx, doc, prior) {
     // ---------------------------------------------------------------- 5. bill
     const terms_ = paymentTermsFromPo(po, terms);
     if (config.run.dryRun) {
-      return finish(STATUS.WOULD_BILL, null, { bill_id: null });
+      return finish(STATUS.WOULD_BILL, noteOf(result), { bill_id: null });
     }
 
     // retry of an attach-only failure: bill exists, just attach
@@ -191,7 +204,7 @@ async function processDocument(ctx, doc, prior) {
       if (!(res && res.code === 0)) return finish(STATUS.BILLED_NO_ATTACH, reason('ATTACH_FAILED', 'attach retry failed'), { bill_id: prior.bill_id, bill_number: prior.bill_number });
       await books.deleteDocument(documentId);
       result.links.bill = `${config.report.booksAppBase}#/bills/${prior.bill_id}`;
-      return finish(STATUS.BILLED, null, { bill_id: prior.bill_id, bill_number: prior.bill_number });
+      return finish(STATUS.BILLED, noteOf(result), { bill_id: prior.bill_id, bill_number: prior.bill_number });
     }
 
     const template = await books.getBillFromPurchaseOrders(po.purchaseorder_id);
@@ -211,7 +224,8 @@ async function processDocument(ctx, doc, prior) {
       expectedTotal = lineMatch.expected.gross;
       const c = lineMatch.carriage;
       if (c.invoice > 0) {
-        if (c.poLineId) { quantities[c.poLineId] = 1; rates[c.poLineId] = c.invoice; }
+        // on the PO's open carriage line, for everything still open on it: the line (and with it the PO) is complete
+        if (c.poLineId) { quantities[c.poLineId] = c.poLineQty; rates[c.poLineId] = c.poLineRate; }
         else extraLines.push(carriageLine(template, c.invoice, { itemId: config.matching.carriageItemId, accountId: config.matching.carriageAccountId }));
       }
       const tl = template.line_items || [];
@@ -235,7 +249,7 @@ async function processDocument(ctx, doc, prior) {
     const billTotal = Number(bill && bill.total);
     if (Number.isFinite(billTotal) && Math.abs(billTotal - extraction.totals.gross) >= 0.01) {
       // Bill exists with a different figure than the invoice (adjustment not applied / tax recomputed) — flag it, never silently.
-      result.note = `bill total ${fmt(billTotal)} differs from invoice ${fmt(extraction.totals.gross)}`;
+      result.note = [`bill total ${fmt(billTotal)} differs from invoice ${fmt(extraction.totals.gross)}`, result.note].filter(Boolean).join('; ');
       logger.warn('bill.total_differs', { bill_id: bill.bill_id, bill_total: billTotal, invoice_total: extraction.totals.gross, adjustment: payload.adjustment || 0 });
     }
 
@@ -243,7 +257,7 @@ async function processDocument(ctx, doc, prior) {
       return finish(STATUS.BILLED_NO_ATTACH, reason('ATTACH_FAILED', 'attachment not confirmed'), { bill_id: bill.bill_id, bill_number: bill.bill_number });
     }
     await books.deleteDocument(documentId);
-    return finish(STATUS.BILLED, null, { bill_id: bill.bill_id, bill_number: bill.bill_number });
+    return finish(STATUS.BILLED, noteOf(result), { bill_id: bill.bill_id, bill_number: bill.bill_number });
   } catch (err) {
     logger.error('document.failed', { document_id: documentId, error: err });
     if (err && err.code === 'BOOKS_DAILY_LIMIT') throw err; // let the run stop cleanly

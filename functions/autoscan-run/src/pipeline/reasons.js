@@ -21,10 +21,10 @@ const REASONS = Object.freeze({
   BILL_TEMPLATE_MISMATCH: { retry: true, action: 'The PO\'s remaining (un-billed) quantities do not add up to this invoice. Check earlier bills on the PO; bill manually if needed.' },
   // Phase 2
   NO_MPN: { retry: true, action: 'One or more invoice lines have no product code (MPN). Bill manually.' },
-  LINE_UNMATCHED: { retry: true, action: 'An invoice line does not match any PO line by MPN. Check the PO lines / item MPNs.' },
-  PRICE_MISMATCH: { retry: true, action: 'Unit price on the invoice differs from the PO beyond tolerance. Amend the PO or query the supplier.' },
+  LINE_UNMATCHED: { retry: true, action: 'An invoice line does not match any PO line by supplier code, and no single PO line fits it by value. Add the supplier\'s code (Supplier Reference / MPN) to the item, or check the PO lines.' },
+  PRICE_MISMATCH: { retry: true, action: 'Unit price on the invoice (including any product surcharge) differs from the PO beyond tolerance. Amend the PO or query the supplier.' },
   QTY_EXCEEDS: { retry: true, action: 'Invoiced quantity exceeds the quantity remaining on the PO. Check the PO / previous bills.' },
-  CARRIAGE_MISMATCH: { retry: true, action: 'Carriage differs from the PO beyond this supplier\'s tolerance. Amend the PO or the vendor\'s carriage rule.' },
+  CARRIAGE_MISMATCH: { retry: true, action: 'Carriage on the invoice is higher than what is open on the PO, beyond this supplier\'s carriage rule. Amend the PO or the vendor\'s carriage rule.' },
 });
 
 function reason(code, text) {

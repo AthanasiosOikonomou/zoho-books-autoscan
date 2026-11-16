@@ -45,6 +45,9 @@ const ITEMS = [
   { key: 'emul10', name: 'Trade Emulsion 10L Magnolia', sku: 'CP-EM10M', mpn: 'CP-EM10M', rate: 48.75 },
   { key: 'roller', name: 'Roller Sleeve 9in Medium (pack 10)', sku: 'BS-RS9M', mpn: 'BS-RS9M', rate: 15.9 },
   { key: 'tape', name: 'Masking Tape 48mm (box 24)', sku: 'BS-MT48', mpn: 'BS-MT48', rate: 19.8 },
+  // items WITHOUT a supplier code in Books (internal SKU only): the supplier prints its own code (`supplierCode`) on the invoice
+  { key: 'nosing_w', name: 'Anti-Slip Stair Nosing 1.2m White', sku: 'INT-900101', mpn: null, supplierCode: 'SN1200WH', rate: 31.4 },
+  { key: 'nosing_b', name: 'Anti-Slip Stair Nosing 1.2m Black', sku: 'INT-900102', mpn: null, supplierCode: 'SN1200BK', rate: 31.4 },
 ];
 
 // scenario: what the PO looks like, and what invoice(s) the generator should produce for it
@@ -98,6 +101,30 @@ const POS = [
   // --- carriage on the invoice, none on the PO: the bill gets its own carriage line (CARRIAGE_ITEM_ID, else CARRIAGE_ACCOUNT_ID)
   { key: 'carriage_extra', vendor: 'harlow', number: null, reference: null, lines: [['roller', 4]], carriage: 0,
     invoices: [{ suffix: 'A', label: 'PO has no carriage line, invoice carries 8.00, vendor rule Ignore → BILLED with an added carriage line', refStyle: 'zoho', lines: 'all', carriage: 8 }] },
+  // --- client rules of 16 Nov 2026 (all on a vendor whose carriage rule is Zero, i.e. the default)
+  // carriage at or below the PO is accepted under every rule and billed as invoiced
+  { key: 'carriage_lower', vendor: 'rustoleum', number: null, reference: null, lines: [['combi25', 3]], carriage: 12,
+    invoices: [{ suffix: 'A', label: 'Carriage 4.99 invoiced, 12.00 on the PO, rule Zero → BILLED with 4.99 on the PO carriage line; the PO is Billed', refStyle: 'zoho', lines: 'all', carriage: 4.99 }] },
+  { key: 'carriage_none', vendor: 'rustoleum', number: null, reference: null, lines: [['combi25', 5]], carriage: 11.5,
+    invoices: [
+      { suffix: 'A', label: 'No carriage on the invoice, 11.50 on the PO → BILLED; the PO stays Partially Billed (carriage line open)', refStyle: 'zoho', lines: 'all', carriage: 0 },
+      { suffix: 'B', label: 'The separate carriage-only invoice (11.50) → BILLED on the open carriage line; the PO is Billed', refStyle: 'zoho', lines: { combi25: 0 }, carriage: 11.5 },
+    ] },
+  { key: 'carriage_second', vendor: 'rustoleum', number: null, reference: null, lines: [['roller', 10]], carriage: 10,
+    invoices: [
+      { suffix: 'A', label: 'Part-shipment 1 of 2 with carriage 10.00 → BILLED (the PO carriage line is used up)', refStyle: 'zoho', lines: { roller: 6 }, carriage: 10 },
+      { suffix: 'B', label: 'Part-shipment 2 of 2 charges carriage 10.00 again — UPLOAD AFTER A IS BILLED → CARRIAGE_MISMATCH (nothing open on the PO, rule Zero)', refStyle: 'zoho', lines: { roller: 4 }, carriage: 10 },
+    ] },
+  // a product surcharge is part of the product price
+  { key: 'surcharge_in_price', vendor: 'rustoleum', number: null, reference: null, lines: [['tape', 6]], carriage: 0,
+    invoices: [{ suffix: 'A', label: 'Price 18.86 + 5% surcharge row = the PO price 19.80 → BILLED at the invoice total', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { tape: -0.94 }, surcharge: { pct: 5, code: 'SUR02', label: 'PRODUCT SURCHARGE 5%' } }] },
+  { key: 'surcharge_extra', vendor: 'rustoleum', number: null, reference: null, lines: [['tape', 8]], carriage: 0,
+    invoices: [{ suffix: 'A', label: 'PO price 19.80 + 5% surcharge row on top → PRICE_MISMATCH +5.0%', refStyle: 'zoho', lines: 'all', carriage: 0, surcharge: { pct: 5, code: 'SUR02', label: 'PRODUCT SURCHARGE 5%' } }] },
+  // an item without a supplier code: matched by value when exactly one open line fits
+  { key: 'fallback_unique', vendor: 'rustoleum', number: null, reference: null, lines: [['nosing_w', 4]], carriage: 0,
+    invoices: [{ suffix: 'A', label: 'Item has no Supplier Reference / MPN; one line fits by value → BILLED, the report names the code to add (SN1200WH)', refStyle: 'zoho', lines: 'all', carriage: 0 }] },
+  { key: 'fallback_ambiguous', vendor: 'rustoleum', number: null, reference: null, lines: [['nosing_w', 2], ['nosing_b', 2]], carriage: 0,
+    invoices: [{ suffix: 'A', label: 'Two items without a code at the same price and quantity → LINE_UNMATCHED (ambiguous)', refStyle: 'zoho', lines: 'all', carriage: 0 }] },
 ];
 
 (async () => {
@@ -157,13 +184,13 @@ const POS = [
     } else console.log(`= item ${it.name} (${i.item_id})`);
     // Phase 2: item custom field "Supplier Reference" (production prints it on PO lines; mirrored here) = the supplier's code
     const fullItem = (await books.request(`/items/${i.item_id}`)).item || i;
-    const cfu = customFieldValues(fullItem.custom_fields, { 'supplier reference': it.mpn }, itemDefs);
+    const cfu = it.mpn ? customFieldValues(fullItem.custom_fields, { 'supplier reference': it.mpn }, itemDefs) : { missing: [], changes: [], guessed: [] }; // no code on purpose
     if (cfu.missing.length && it === ITEMS[0]) console.log(`! item custom field "Supplier Reference" not found — create it in the UI (Settings → Preferences → Items → Custom Fields, type Text, show on PDF) and re-run`);
     if (cfu.changes.length) {
       try { await books.request(`/items/${i.item_id}`, { method: 'PUT', json: { custom_fields: cfu.changes } }); console.log(`  ~ ${it.name}: Supplier Reference ${it.mpn}${cfu.guessed.length ? ` (via ${cfu.guessed.join(', ')})` : ''}`); }
       catch (err) { console.log(`! ${it.name}: could not write Supplier Reference (${err.message}) — does the item custom field exist? (Settings → Preferences → Items → Custom Fields, Text, label exactly "Supplier Reference")`); }
     }
-    out.items[it.key] = { item_id: i.item_id, name: it.name, sku: it.sku, mpn: it.mpn, rate: it.rate };
+    out.items[it.key] = { item_id: i.item_id, name: it.name, sku: it.sku, mpn: it.mpn, code: it.supplierCode || it.mpn, rate: it.rate };
   }
 
   // payment terms must exist in Settings for vendors/POs to carry them (no API to create them)
@@ -261,7 +288,7 @@ const POS = [
     out.pos[p.key] = {
       purchaseorder_id: po.purchaseorder_id, number: po.purchaseorder_number, reference: p.reference, vendor: p.vendor,
       total: po.total, sub_total: po.sub_total, tax_total: po.tax_total,
-      lines: p.lines.map(([k, q]) => ({ item: k, mpn: out.items[k].mpn, name: out.items[k].name, qty: q, rate: out.items[k].rate })),
+      lines: p.lines.map(([k, q]) => ({ item: k, mpn: out.items[k].mpn, code: out.items[k].code, name: out.items[k].name, qty: q, rate: out.items[k].rate })),
       carriage: p.carriage, invoices: p.invoices,
     };
   }

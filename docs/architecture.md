@@ -68,7 +68,7 @@ Status: design baseline for the Phase 1 + Phase 2 build.
 | Document > page cap or unreadable | PAGE_LIMIT / UNREADABLE | None | Stays | No — manual |
 | Claude / Books API error | AI_ERROR / BOOKS_ERROR | None | Stays | Pass B automatically |
 | Bill created but attachment failed | BILLED_NO_ATTACH | Bill exists | Stays | Pass B attaches only (dedupe prevents a second bill) |
-| Phase 2: line without MPN / unmatched line / qty over remaining / carriage over tolerance | NO_MPN / LINE_UNMATCHED / QTY_EXCEEDS / CARRIAGE_MISMATCH | None | Stays | Pass B |
+| Phase 2: line without MPN / unmatched line / qty over remaining / price outside tolerance (incl. a product surcharge the PO price does not contain) / carriage above the PO beyond the vendor rule | NO_MPN / LINE_UNMATCHED / QTY_EXCEEDS / PRICE_MISMATCH / CARRIAGE_MISMATCH | None | Stays | Pass B |
 
 Finance's "retry" is: fix the PO (or vendor rule) in Books. Nothing to click. The next Pass B picks it up.
 
@@ -82,7 +82,7 @@ document_state
   file_hash         sha256 of the binary → same file re-uploaded = reuse extraction, no AI call
   file_name, mime, pages
   status            NEW | BILLED | EXCEPTION | DUPLICATE | BILLED_NO_ATTACH
-  reason_code, reason_text
+  reason_code, reason_text     (on a BILLED / WOULD_BILL row: reason_code empty, reason_text = the billing notes shown in the digest)
   attempts, first_seen, last_attempt
   vendor_id, po_id, bill_id
   extraction_json   Claude output (text)
@@ -113,7 +113,14 @@ Queries are run-level (`WHERE status = 'EXCEPTION' AND last_attempt < ?`), never
 
 **Match, Phase 1** — `|invoice gross − PO total| ≤ £0.02` (config).
 
-**Match, Phase 2** — per invoice line: MPN → PO line (no fallback to name/SKU) → unit price within tolerance → quantity ≤ ordered − already billed. Carriage compared separately per vendor rule (Zero / Fixed £X / Ignore; Ignore auto-applied to PrestaShop-extension POs once the identifier is confirmed). VAT separate. All lines must match or the whole document is an exception with per-line detail.
+**Match, Phase 2** (as built; rules of 6 and 16 Nov 2026) — per invoice line:
+
+1. **Line → PO line** by the supplier's code: item custom field *Supplier Reference*, then item MPN (`part_number`), then SKU / item code, all normalised. **Value fallback** (`LINE_VALUE_FALLBACK`): an invoice line with no code match takes a PO line only if that line's item has no supplier-side code (no Supplier Reference, no MPN), it is the *one* open line with the same unit price to the penny (or the same money as a whole pack) and enough open quantity, no other invoice line could take it, and the two descriptions share a word. The match is noted with the code to add to the item. Anything ambiguous → `LINE_UNMATCHED`.
+2. **Price**: up to 5 % below the PO → billed at the invoice price; any increase → `PRICE_MISMATCH`. A **product surcharge** on the invoice (`SURCHARGE_IN_PRICE`; a charge whose description says surcharge / levy without naming the delivery) is part of the product price: it is spread over the product lines by value before this check, so a surcharge the PO price already contains lands on the PO price and one it does not contain is a price increase.
+3. **Quantity** ≤ ordered − already billed (pack ↔ each recognised).
+4. **Carriage** (delivery charges only) against what is still open on the PO's carriage line: at or below the PO → accepted under every rule and billed as invoiced on that line for its whole open quantity, so the line and the PO complete (`CARRIAGE_BELOW_PO_OK`); none invoiced → nothing billed for carriage, the PO stays partially billed for the supplier's separate carriage invoice; a **carriage-only invoice** bills just that line. Above the PO the vendor rule decides (Zero: never / Fixed: up to the tolerance / Ignore: always); with no open carriage line (none on the PO, or already billed by an earlier shipment) accepted carriage becomes a line of its own.
+
+VAT separate. All lines must match or the whole document is an exception with per-line detail. Web-shop purchase orders are treated like any other (no PO-level override).
 
 **Bill** — `GET bills/editpage/frompurchaseorders` → set Bill# = supplier invoice no., date = invoice date (fallback today), terms from PO (by id), quantities = invoiced (partial allowed; Books tracks `quantity_billed` natively) → `POST bills` → ensure Open → attach → **verify** → delete inbox file → state BILLED.
 

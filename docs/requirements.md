@@ -11,7 +11,7 @@ What the client's finance lead confirmed in writing, and where each point stands
 | 5 | On match: create the Bill under the correct vendor, linked to the PO, with the invoice attached | Done — bill from the PO template, attachment verified before the inbox file is deleted | `bill.js`, `processDocument.js` |
 | 6 | **Bill date = the date on the supplier invoice**, never the received/processed date | Done | `bill.js` (`date: invoiceDate`) |
 | 7 | Not matched confidently → manual review by the finance team | Done — `LOW_CONFIDENCE` below `CONFIDENCE_THRESHOLD`, every exception carries a reason and an action | `reasons.js`, report |
-| 8 | **Carriage variance**: configurable per supplier — zero tolerance / absolute £ tolerance per supplier / excluded from matching (PO carriage often bears little relation to the invoiced amount, e.g. £15 on £150) | **Built** — vendor custom fields *Carriage Rule* (Zero/Fixed/Ignore) / *Carriage Tolerance*, read by label; default Zero (client); the bill carries the invoiced carriage | `vendorRules.js`, `lines.js` |
+| 8 | **Carriage variance**: configurable per supplier — zero tolerance / absolute £ tolerance per supplier / excluded from matching (PO carriage often bears little relation to the invoiced amount, e.g. £15 on £150) | **Built** — vendor custom fields *Carriage Rule* (Zero/Fixed/Ignore) / *Carriage Tolerance*, read by label; default Zero (client); the bill carries the invoiced carriage. Since 16 Nov 2026 the rule governs carriage **above** the PO only (see below) | `vendorRules.js`, `lines.js` |
 | 9 | **Partial invoicing**: suppliers ship and invoice part of an order; today invoices are held until the order completes → line-level matching on **MPN**, one PO satisfied across several invoices | **Built** — invoiced quantities only, ≤ remaining per PO line, at invoice prices; Books tracks what is still open | `lines.js`, `bill.js` (`quantities`, `rates`) |
 
 Price policy (client, 6 Nov 2026): a line invoiced **below** the PO price by up to 5 % (`LINE_PRICE_TOLERANCE_PCT`) is billed at the invoice price and noted in the report; further below, or **any** price above the PO (`LINE_PRICE_TOLERANCE_UP_PCT` = 0), goes to review as `PRICE_MISMATCH`. `LINE_PRICE_TOLERANCE_ABS` (1p) only absorbs rounding.
@@ -31,5 +31,17 @@ Additional rules from the project lead (4 Nov 2026):
 - Web-shop (PrestaShop) purchase orders: treated exactly like purchase orders raised by the team — same £1 total tolerance, same line matching, carriage by the vendor's rule. No PO-level override.
 - Report mailbox: provided 6 Nov 2026 — the digest is sent by SMTP from the client's mailbox (verified on Catalyst).
 - Historical backlog in the Books inbox: **not to be touched** — `SCAN_SINCE` (the go-live date) makes documents created before it invisible to the service.
-- MPN / Supplier Reference data: The organisation knows which items lack a code and updates them periodically — no readiness list from the integrator.
+- MPN / Supplier Reference data: the client knows which items lack a code and updates them periodically — no readiness list needed from us.
 - Documentation and handover follow UAT, since UAT may change behaviour.
+
+## Client answers (16 Nov 2026) — after the second set of real documents
+
+Confirmed as built: pack ↔ each; a PO whose carriage is not invoiced stays partially billed; a PO reference that is not in Books goes to manual review (it is never "under another number"); any price increase goes to review; bill numbers are the supplier's invoice number exactly as printed, leading zeros included; bill date = the supplier invoice date.
+
+New rules (built 16 Nov 2026, `lines.js`):
+
+- **Carriage lower than the PO**: the bill is created with the supplier's carriage figure and the PO completes (the PO's carriage line is billed in full at the invoice amount). **No carriage on the invoice**: the bill is created for the invoice amount and the PO stays partially billed — the supplier is expected to send a separate carriage invoice, which is then billed on the open carriage line. Carriage **above** the PO: manual review unless the vendor's *Carriage Rule* allows it (Fixed = up to the tolerance above the PO, Ignore = any). `CARRIAGE_BELOW_PO_OK`.
+- **Supplier surcharges are not carriage.** They are worked into the PO's item prices, so a surcharge line is folded into the product price and the invoice must still match the PO price. Where the PO price does not contain the surcharge the document goes to manual review as a price increase (confirmed on two real invoices whose PO prices had been entered without it). `SURCHARGE_IN_PRICE`.
+- **Items with no supplier code**: the supplier code stays the first choice (Supplier Reference, then MPN); otherwise the line is matched by value when exactly one open PO line without a supplier code has the same unit price and enough open quantity, and the descriptions share a word. Two lines that could fit (the same product in two colours at the same price) → manual review. Every such match is noted in the report with the code to add to the item. `LINE_VALUE_FALLBACK`.
+
+Not answered by the client: what to allow per supplier when carriage is **above** the PO. Default stays manual review; finance sets the vendor fields whenever they want.

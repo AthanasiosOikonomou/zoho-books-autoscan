@@ -5,7 +5,11 @@
  *   "Carriage Rule"       dropdown  Zero | Fixed | Ignore
  *   "Carriage Tolerance"  decimal   £ (used by Fixed)
  * Fields are found by LABEL, because the API name differs between a sandbox (cf__sb_<org>_carriage_rule)
- * and production (cf_carriage_rule). Default when nothing is set: Zero (any variance goes to review) — client rule.
+ * and production (cf_carriage_rule). Default when nothing is set: Zero — client rule.
+ *
+ * What the rule governs (lines.js): carriage invoiced at or below the PO's carriage is always accepted; the rule decides
+ * about carriage ABOVE the PO — Zero: never, Fixed: up to the tolerance, Ignore: always. With CARRIAGE_BELOW_PO_OK=false
+ * the rule applies in both directions.
  */
 
 const RULES = new Set(['Zero', 'Fixed', 'Ignore']);

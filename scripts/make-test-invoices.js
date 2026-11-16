@@ -7,6 +7,8 @@
  * extractor is exercised the way real suppliers do it.
  *
  *   node scripts/make-test-invoices.js            → seed/invoices/*.pdf + manifest.json
+ *   node scripts/make-test-invoices.js --only carriage_lower,surcharge_extra
+ *                                                 → only those scenarios' PDFs are (re)written; numbers and manifest stay complete
  *
  * Upload the PDFs to the sandbox Documents inbox (drag & drop, or email them
  * to the sandbox inbox address), then run scripts/local-run.js.
@@ -24,6 +26,8 @@ fs.mkdirSync(outDir, { recursive: true });
 
 const VAT = ((seed.tax && seed.tax.percentage) || 20) / 100;
 const manifest = [];
+const onlyArg = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null;
+const only = onlyArg ? new Set(String(onlyArg).split(',').map((s) => s.trim()).filter(Boolean)) : null; // scenario keys
 let seq = 480000;
 let cseq = 490000; // credit notes count separately so adding one never renumbers the invoices already uploaded
 
@@ -39,8 +43,9 @@ for (const [key, po] of Object.entries(seed.pos)) {
       .filter((l) => l.qty > 0);
     const net = round2(lines.reduce((s, l) => s + l.total, 0));
     const carriage = inv.carriage || 0;
-    const vat = round2((net + carriage) * VAT);
-    const gross = round2(net + carriage + vat);
+    const surcharge = inv.surcharge ? round2(net * inv.surcharge.pct / 100) : 0; // a product surcharge row (not carriage)
+    const vat = round2((net + surcharge + carriage) * VAT);
+    const gross = round2(net + surcharge + carriage + vat);
     const isCredit = inv.kind === 'credit_note';
     const invoiceNumber = inv.sameInvoiceNumberAs
       ? manifest.find((m) => m.po_key === key && m.suffix === inv.sameInvoiceNumberAs).invoice_number
@@ -48,9 +53,11 @@ for (const [key, po] of Object.entries(seed.pos)) {
     const ref = refFor(inv.refStyle, po);
     const againstInvoice = inv.againstInvoice ? (manifest.find((m) => m.po_key === key && m.suffix === inv.againstInvoice) || {}).invoice_number || null : null;
     const file = `${key}-${inv.suffix}.pdf`;
-    if (isCredit) renderCreditNote(path.join(outDir, file), { vendor, po, inv, lines, net, carriage, vat, gross, creditNumber: invoiceNumber, ref, againstInvoice });
-    else renderInvoice(path.join(outDir, file), { vendor, po, inv, lines, net, carriage, vat, gross, invoiceNumber, ref });
-    manifest.push({ file, kind: isCredit ? 'credit_note' : 'invoice', po_key: key, suffix: inv.suffix, label: inv.label, vendor: vendor.name, po_number: po.number, po_reference: po.reference, printed_ref: ref, invoice_number: invoiceNumber, against_invoice: againstInvoice, net, carriage, vat, gross, expected: expectedOutcome(inv, key) });
+    const write = !only || only.has(key);
+    if (write && isCredit) renderCreditNote(path.join(outDir, file), { vendor, po, inv, lines, net, carriage, vat, gross, creditNumber: invoiceNumber, ref, againstInvoice });
+    else if (write) renderInvoice(path.join(outDir, file), { vendor, po, inv, lines, net, carriage, surcharge, vat, gross, invoiceNumber, ref });
+    manifest.push({ file, kind: isCredit ? 'credit_note' : 'invoice', po_key: key, suffix: inv.suffix, label: inv.label, vendor: vendor.name, po_number: po.number, po_reference: po.reference, printed_ref: ref, invoice_number: invoiceNumber, against_invoice: againstInvoice, net, carriage, surcharge, vat, gross, expected: expectedOutcome(inv, key) });
+    if (!write) continue;
     const poTotal = Number(po.total || 0);
     const flag = inv.lines === 'all' && !inv.priceDelta && Math.abs(gross - poTotal) <= 0.02 ? 'MATCH' : 'differs';
     console.log(`${file.padEnd(24)} ${invoiceNumber.padEnd(14)} ref="${ref || ''}" gross=${gross.toFixed(2)} PO=${poTotal.toFixed(2)} ${flag.padEnd(7)} ${inv.label}`);
@@ -79,6 +86,13 @@ function expectedOutcome(inv, key) {
   if (key === 'mismatch') return 'TOTAL_MISMATCH (Phase 1) / PRICE_MISMATCH +11.8% (Phase 2)';
   if (key === 'price_lower') return 'TOTAL_MISMATCH (Phase 1) → BILLED at the invoice price 47.30 (−3.0%, within the 5% below-PO tolerance), noted (Phase 2)';
   if (key === 'price_lower_far') return 'TOTAL_MISMATCH (Phase 1) / PRICE_MISMATCH −10.0% (Phase 2, allowed down to −5%)';
+  if (key === 'carriage_lower') return 'TOTAL_MISMATCH (Phase 1) → BILLED with carriage 4.99 on the PO carriage line; PO status Billed (Phase 2, rule Zero: at or below the PO always passes)';
+  if (key === 'carriage_none') return inv.suffix === 'A' ? 'TOTAL_MISMATCH (Phase 1) → BILLED without carriage; PO stays Partially Billed, note in the report (Phase 2)' : 'BILLED carriage-only on the open PO carriage line; PO status Billed';
+  if (key === 'carriage_second') return inv.suffix === 'A' ? 'TOTAL_MISMATCH (Phase 1) → BILLED 6 × roller + carriage 10.00 (Phase 2)' : 'Upload after A is billed → CARRIAGE_MISMATCH: 10.00 vs 0.00 still open on the PO (Phase 2, rule Zero)';
+  if (key === 'surcharge_in_price') return 'BILLED — 18.86 + 5% surcharge = the PO price; bill total = invoice total (Phase 2: the surcharge is part of the product price)';
+  if (key === 'surcharge_extra') return 'TOTAL_MISMATCH (Phase 1) / PRICE_MISMATCH +5.0% incl. the surcharge (Phase 2)';
+  if (key === 'fallback_unique') return 'BILLED — matched by value; the report says "add Supplier Reference SN1200WH to the item" (Phase 2)';
+  if (key === 'fallback_ambiguous') return 'BILLED on totals (Phase 1) / LINE_UNMATCHED — the value fits more than one line (Phase 2)';
   if (key === 'carriage_extra') return 'TOTAL_MISMATCH (Phase 1) → BILLED with an added carriage line 8.00 (Phase 2, Ignore; booked on CARRIAGE_ITEM_ID, else CARRIAGE_ACCOUNT_ID)';
   if (key === 'price_higher') return 'TOTAL_MISMATCH (Phase 1) / PRICE_MISMATCH +3.6% (Phase 2, increases always go to review)';
   if (key === 'carriage_zero') return 'TOTAL_MISMATCH (Phase 1) / CARRIAGE_MISMATCH — vendor rule Zero (Phase 2)';
@@ -124,10 +138,17 @@ function renderInvoice(file, d) {
   doc.font('Helvetica');
   y += 16;
   for (const l of d.lines) {
-    doc.text(l.mpn, cols[0], y); doc.text(l.name, cols[1], y, { width: 220 });
+    doc.text(l.code || l.mpn || '', cols[0], y); doc.text(l.name, cols[1], y, { width: 220 });
     doc.text(String(l.qty), cols[2], y, { width: 60, align: 'right' });
     doc.text(l.rate.toFixed(2), cols[3], y, { width: 60, align: 'right' });
     doc.text(l.total.toFixed(2), cols[4], y, { width: 60, align: 'right' });
+    y += 16;
+  }
+  if (d.surcharge) { // a product surcharge as a coded row of the table, the way suppliers print it
+    doc.text(d.inv.surcharge.code || 'SUR', cols[0], y); doc.text(d.inv.surcharge.label, cols[1], y, { width: 220 });
+    doc.text('1', cols[2], y, { width: 60, align: 'right' });
+    doc.text(d.surcharge.toFixed(2), cols[3], y, { width: 60, align: 'right' });
+    doc.text(d.surcharge.toFixed(2), cols[4], y, { width: 60, align: 'right' });
     y += 16;
   }
   if (d.carriage) {
@@ -136,11 +157,14 @@ function renderInvoice(file, d) {
     y += 16;
   }
   y += 10;
+  const goods = d.net + (d.surcharge || 0); // the surcharge row is part of the goods subtotal
+  const all = goods + d.carriage;
+  const sub = d.lines.length ? goods : all; // a carriage-only invoice shows its carriage as the net amount
   const totals = [
-    [['Subtotal', d.net], ['VAT @ 20%', d.vat], ['Total GBP Incl. VAT', d.gross]],
-    [['Net Amount', d.net + d.carriage], ['VAT', d.vat], ['Gross Amount', d.gross]],
-    [['GOODS', d.net], ['VAT', d.vat], ['Total Due Amount GBP', d.gross]],
-    [['Net', d.net + d.carriage], ['VAT 20%', d.vat], ['Total amount [GBP] incl. VAT', d.gross]],
+    [['Subtotal', sub], ['VAT @ 20%', d.vat], ['Total GBP Incl. VAT', d.gross]],
+    [['Net Amount', all], ['VAT', d.vat], ['Gross Amount', d.gross]],
+    [['GOODS', sub], ['VAT', d.vat], ['Total Due Amount GBP', d.gross]],
+    [['Net', all], ['VAT 20%', d.vat], ['Total amount [GBP] incl. VAT', d.gross]],
   ][style];
   for (const [k, v] of totals) {
     doc.text(k, 330, y, { width: 150, align: 'right' });

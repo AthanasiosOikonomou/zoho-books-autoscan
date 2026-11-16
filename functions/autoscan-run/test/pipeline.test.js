@@ -185,7 +185,7 @@ test('documents marked WOULD_BILL in dry-run are billed by the first live run', 
   assert.equal(live.billed, 1); assert.equal(books.state.created.length, 1); assert.equal(ex.seen.length, 1, 'no second extraction');
 });
 
-test('a prompt change re-reads extraction-related exceptions but not total mismatches', async () => {
+test('a prompt change re-reads documents parked for a reading or matching reason — once', async () => {
   const books = fakeBooks({ docs: [
     { document_id: 'd11', file_name: 'j.pdf', transactions: [] },
     { document_id: 'd12', file_name: 'k.pdf', transactions: [] },
@@ -201,7 +201,9 @@ test('a prompt change re-reads extraction-related exceptions but not total misma
 
   ex.promptVersion = 'v2'; // prompt improved
   await runAutoscan({ config, books: books.api, extractor: ex, store, mailer: m, logger, now: () => new Date(t0.getTime() + 60000) });
-  assert.deepEqual(ex.seen.slice(2), ['d11'], 'only the NO_PO_REF document was re-read');
+  assert.deepEqual(ex.seen.slice(2).sort(), ['d11', 'd12'], 'the unread PO reference and the total mismatch (a possible misread) are both read again');
+  await runAutoscan({ config, books: books.api, extractor: ex, store, mailer: m, logger, now: () => new Date(t0.getTime() + 120000) });
+  assert.equal(ex.seen.length, 4, 'same prompt on the next retry: the stored extraction is reused, no AI call');
 });
 
 test('two copies of the same invoice in one batch: one bill, the other DUPLICATE, never a Books error', async () => {
@@ -365,6 +367,53 @@ test('phase 2: any price increase → PRICE_MISMATCH; up to 5% lower → BILLED 
   const kl = await runAutoscan({ config: cfg(P2), books: books3.api, extractor: p2Extractor({ kl: { po_reference: 'PO-00080', lines: [{ mpn: 'ZZ-1', quantity: 4, unit_price: 25 }] } }), store: new JsonFileStore(), mailer: mailer(), logger });
   assert.equal(kl.results[0].status, STATUS.BILLED, kl.results[0].reason_text); assert.equal(kl.results[0].lines.fallback, 'totals'); assert.equal(kl.results[0].match.basis, 'po_total');
   assert.ok(books3.calls.includes('item.get:it-k'), 'keyless PO line → item looked up for an MPN');
+});
+
+test('phase 2: carriage below the PO is billed as invoiced on the PO carriage line under rule Zero; none invoiced leaves that line open and the later carriage-only invoice bills it; the notes are stored for the digest', async () => {
+  const mk = (docs) => {
+    const pos2 = [{ purchaseorder_id: 'po9', purchaseorder_number: 'PO-00090', vendor_id: 'v1', vendor_name: 'Vendor', total: 0, payment_terms: 30, line_items: [poLine('a', 'RX-4402', 12, 11.2), poLine('c', null, 1, 12, { name: 'Carriage', item_id: 'it-carr' })] }];
+    const books = fakeBooks({ docs, pos: pos2 }); books.state.contacts.v1 = vendorCf('Zero', 0); books.state.taxOnBills = true;
+    return { books, pos2 };
+  };
+  const goods = [{ mpn: 'RX-4402', quantity: 12, unit_price: 11.2 }];
+  // 4.99 invoiced against 12.00 on the PO
+  const lo = mk([{ document_id: 'cl', file_name: 'lower.pdf', transactions: [] }]); const store = new JsonFileStore();
+  const r = await runAutoscan({ config: cfg(P2), books: lo.books.api, extractor: p2Extractor({ cl: { po_reference: 'PO-00090', lines: goods, carriage: 4.99 } }), store, mailer: mailer(), logger });
+  assert.equal(r.results[0].status, STATUS.BILLED, r.results[0].reason_text);
+  assert.deepEqual(lo.books.state.created[0].payload.line_items.map((l) => [l.purchaseorder_item_id, l.quantity, l.rate]), [['a', 12, 11.2], ['c', 1, 4.99]], 'the PO carriage line is billed in full at the invoice figure → the PO completes');
+  assert.equal(lo.books.state.created[0].total, r2((134.4 + 4.99) * 1.2));
+  const st = (await store.getByDocumentIds(['cl'])).get('cl');
+  assert.equal(st.status, STATUS.BILLED); assert.ok(!st.reason_code); assert.match(st.reason_text, /carriage 4\.99 invoiced vs 12\.00 on the PO — billed as invoiced/);
+  // no carriage on the goods invoice, then the supplier's separate carriage invoice
+  const no = mk([{ document_id: 'cn', file_name: 'goods.pdf', transactions: [] }]); const store2 = new JsonFileStore();
+  const g = await runAutoscan({ config: cfg(P2), books: no.books.api, extractor: p2Extractor({ cn: { po_reference: 'PO-00090', lines: goods } }), store: store2, mailer: mailer(), logger });
+  assert.equal(g.results[0].status, STATUS.BILLED, g.results[0].reason_text);
+  assert.deepEqual(no.books.state.created[0].payload.line_items.map((l) => [l.purchaseorder_item_id, l.quantity, l.rate]), [['a', 12, 11.2]], 'the carriage line is not billed: the PO stays partially billed');
+  assert.match(g.results[0].note, /no carriage on the invoice — 12\.00 stays open on the PO for a separate carriage invoice/);
+  no.pos2[0].line_items[0].quantity_billed = 12; // Books now shows the goods as billed
+  no.books.state.docs.push({ document_id: 'co', file_name: 'carriage-only.pdf', transactions: [] });
+  const c = await runAutoscan({ config: cfg(P2), books: no.books.api, extractor: p2Extractor({ co: { po_reference: 'PO-00090', lines: [], carriage: 12 } }), store: store2, mailer: mailer(), logger });
+  assert.equal(c.results[0].status, STATUS.BILLED, c.results[0].reason_text);
+  assert.deepEqual(no.books.state.created[1].payload.line_items.map((l) => [l.purchaseorder_item_id, l.quantity, l.rate]), [['c', 1, 12]]);
+  assert.equal(no.books.state.created[1].total, 14.4); assert.match(c.results[0].note, /carriage-only invoice/);
+});
+test('phase 2: an item without a supplier code is billed by value and the note names the code to add; a surcharge the PO price does not contain goes to review', async () => {
+  const pos2 = [{ purchaseorder_id: 'po10', purchaseorder_number: 'PO-00100', vendor_id: 'v1', vendor_name: 'Vendor', total: 0, payment_terms: 30, line_items: [poLine('n', null, 22, 5.8, { name: 'Anti-Slip GRP Stair Nosing: White' })] }];
+  const books = fakeBooks({ docs: [{ document_id: 'vm', file_name: 'nosing.pdf', transactions: [] }], pos: pos2 }); books.state.contacts.v1 = vendorCf('Zero', 0); books.state.taxOnBills = true;
+  books.state.items['it-n'] = { item_id: 'it-n', sku: 'INT-900101', part_number: '' }; // internal SKU only
+  const store = new JsonFileStore();
+  const r = await runAutoscan({ config: cfg(P2), books: books.api, extractor: p2Extractor({ vm: { po_reference: 'PO-00100', lines: [{ mpn: 'SN1200WH', description: 'Anti-Slip GRP Stair Nosing 55mm White', quantity: 22, unit_price: 5.8 }] } }), store, mailer: mailer(), logger });
+  assert.equal(r.results[0].status, STATUS.BILLED, r.results[0].reason_text);
+  assert.deepEqual(books.state.created[0].payload.line_items.map((l) => [l.purchaseorder_item_id, l.quantity, l.rate]), [['n', 22, 5.8]]);
+  assert.match((await store.getByDocumentIds(['vm'])).get('vm').reason_text, /matched by value \(22 × 5\.80\); add Supplier Reference SN1200WH to the item/);
+  // surcharge on top of the PO price
+  const pos3 = [{ purchaseorder_id: 'po11', purchaseorder_number: 'PO-00110', vendor_id: 'v1', vendor_name: 'Vendor', total: 0, payment_terms: 30, line_items: [poLine('t', 'LT204', 6, 5.5), poLine('c', null, 1, 14.95, { name: 'Carriage', item_id: 'it-carr' })] }];
+  const books2 = fakeBooks({ docs: [{ document_id: 'sx', file_name: 'surcharge.pdf', transactions: [] }], pos: pos3 }); books2.state.contacts.v1 = vendorCf('Zero', 0); books2.state.taxOnBills = true;
+  const ex = p2Extractor({ sx: { po_reference: 'PO-00110', lines: [{ mpn: 'LT204', quantity: 6, unit_price: 5.5 }], carriage: 16.6 } });
+  const inner = ex.extract.bind(ex);
+  ex.extract = async (buffer) => { const out = await inner(buffer); out.extraction.charges = [{ description: 'SUR02 PRODUCT GROUP 5% SURCHARGE', amount: 1.65 }, { description: 'Carriage Net', amount: 14.95 }]; return out; };
+  const s = await runAutoscan({ config: cfg(P2), books: books2.api, extractor: ex, store: new JsonFileStore(), mailer: mailer(), logger });
+  assert.equal(s.results[0].reason_code, 'PRICE_MISMATCH'); assert.match(s.results[0].reason_text, /LT204: unit price 5\.7750 incl\. the 5\.0% surcharge vs PO 5\.50 \(\+5\.0%/); assert.equal(books2.state.created.length, 0);
 });
 
 test('SCAN_SINCE: inbox documents created before the date are never read, recorded or deleted; later ones are processed; unparsable times are skipped', async () => {

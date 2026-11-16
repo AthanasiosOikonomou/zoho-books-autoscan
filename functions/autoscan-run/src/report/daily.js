@@ -80,7 +80,11 @@ function buildDailyReport({ day, docs, open, runs, config }) {
   if (billsDone.length) {
     h.push(section(dry ? 'Would be billed today' : 'Bills created today', billsDone.length, '#1e8e5a'));
     h.push(tableOpen(['Supplier', 'Invoice #', 'Invoice date', 'PO', 'Total', '']));
-    for (const r of billsDone) h.push(`<tr>${td(esc(r.vendor_name))}${td(esc(r.invoice_number))}${td(esc(r.invoice_date))}${td(r.po_number ? link(poLink(r), r.po_number) : '')}${td(`£${money(r.invoice_gross)}`, 'right')}${td(billLink(r) ? link(billLink(r), 'Open bill') : '')}</tr>`);
+    for (const r of billsDone) {
+      h.push(`<tr>${td(esc(r.vendor_name))}${td(esc(r.invoice_number))}${td(esc(r.invoice_date))}${td(r.po_number ? link(poLink(r), r.po_number) : '')}${td(`£${money(r.invoice_gross)}`, 'right')}${td(billLink(r) ? link(billLink(r), 'Open bill') : '')}</tr>`);
+      // what the automation decided on the way (lower price accepted, matched by value → code to add, carriage left open…)
+      if (r.reason_text) h.push(`<tr><td colspan="6" style="padding:0 8px 8px;font-size:12px;color:#8a6d1b">Note: ${esc(r.reason_text)}</td></tr>`);
+    }
     h.push(`</table>`);
   }
   // credits
@@ -124,7 +128,7 @@ function buildDailyReport({ day, docs, open, runs, config }) {
   const text = [
     subject, '',
     `${dry ? 'Would be billed' : 'Bills created'}: ${billsDone.length} (£${money(sum(billsDone))})   ${dry ? 'Would be credited' : 'Vendor credits'}: ${creditsDone.length}   Need attention: ${attention.length}   New: ${newToday.length}   Duplicates: ${dupes.length}`,
-    ...(billsDone.length ? ['', dry ? 'WOULD BE BILLED' : 'BILLS CREATED', ...billsDone.map((r) => `  - ${r.vendor_name || ''} | ${r.invoice_number || ''} | ${r.po_number || ''} | £${money(r.invoice_gross)}${billLink(r) ? ` | ${billLink(r)}` : ''}`)] : []),
+    ...(billsDone.length ? ['', dry ? 'WOULD BE BILLED' : 'BILLS CREATED', ...billsDone.map((r) => `  - ${r.vendor_name || ''} | ${r.invoice_number || ''} | ${r.po_number || ''} | £${money(r.invoice_gross)}${billLink(r) ? ` | ${billLink(r)}` : ''}${r.reason_text ? ` | note: ${r.reason_text}` : ''}`)] : []),
     ...(creditsDone.length ? ['', dry ? 'WOULD BE CREDITED' : 'VENDOR CREDITS', ...creditsDone.map((r) => `  - ${r.vendor_name || ''} | ${r.credit_number || r.invoice_number || ''} | PO ${r.po_number || ''} | ${r.bill_number ? `bill ${r.bill_number}` : 'NOT linked to any bill'} | £${money(r.invoice_gross)}`)] : []),
     ...orderedGroups.flatMap(([code, rows]) => ['', `${title(code).toUpperCase()} (${rows.length}): ${(REASONS[code] || {}).action || ''}`, ...rows.map((r) => `  - ${r.file_name} | ${r.vendor_name || ''} | ${r.invoice_number || ''} | ${r.po_number || ''} | ${r.reason_text || ''} | waiting ${age(r.first_seen, day.until)}`)]),
     '', `${runs.length} runs · ${booksCalls} Books calls · ${aiCalls} AI reads · est. AI cost $${cost.toFixed(3)}`,
