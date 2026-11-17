@@ -3,7 +3,7 @@
 /**
  * Supplier credit note → Zoho Books vendor credit.
  *
- * Rule (client, Nov 2026): create the vendor credit and link it to the bill when the
+ * Rule: create the vendor credit and link it to the bill when the
  * bill and the PO can be found, otherwise to the PO only, and say in the report when
  * a credit note is not linked to any bill.
  *

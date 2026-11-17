@@ -51,7 +51,7 @@ test('partial delivery: 6 of 10 → ok and partial; the closing 4 after 6 billed
   const c = matchLines({ extraction: inv([{ mpn: 'CP-EM10M', quantity: 5, unit_price: 48.75 }]), po: { line_items: [poLine('e', 'CP-EM10M', 3, 48.75)] }, vendorRule: ZERO, config: cfg() });
   assert.equal(c.ok, false); assert.equal(c.reason.code, 'QTY_EXCEEDS'); assert.match(c.reason.text, /invoiced 5 but only 3 remaining/);
 });
-test('prices (client rule 6 Nov 2026): up to 5% below the PO → billed at the invoice price with a note; further below → PRICE_MISMATCH; any increase → PRICE_MISMATCH; penny rounding ignored', () => {
+test('prices (price policy): up to 5% below the PO → billed at the invoice price with a note; further below → PRICE_MISMATCH; any increase → PRICE_MISMATCH; penny rounding ignored', () => {
   const po = { line_items: [poLine('a', 'MB7260031E1', 6, 29.16)] };
   const ok = matchLines({ extraction: inv([{ mpn: 'MB7260031E1', quantity: 6, unit_price: 28.31 }]), po, vendorRule: ZERO, config: cfg() }); // −2.9%
   assert.equal(ok.ok, true); assert.equal(ok.rates.a, 28.31); assert.match(ok.notes[0], /-2\.9%, billed at the invoice price/);
@@ -157,7 +157,7 @@ test('pack ↔ each: same code, same money, whole pack size, units available →
   assert.deepEqual(packUnits({ qty: 6, lineTotal: 1108.26, poRate: 1108.26, available: 1 }), { units: 1, rate: 1108.26, factor: 6 });
 });
 
-// ---- client rules of 16 Nov 2026: carriage at or below the PO, product surcharges, items without a supplier code
+// ---- carriage at or below the PO, product surcharges, items without a supplier code
 const withCharges = (e, charges) => { const sum = r2(charges.reduce((t, c) => t + c.amount, 0)); const net = r2(e.line_items.reduce((t, l) => t + l.line_total, 0) + sum); return { ...e, charges, totals: { net, vat: r2(net * 0.2), carriage: sum, gross: r2(net * 1.2) } }; };
 
 test('carriage at or below the PO passes under every rule and is billed as invoiced; above it the vendor rule decides; CARRIAGE_BELOW_PO_OK=false restores the two-way check', () => {

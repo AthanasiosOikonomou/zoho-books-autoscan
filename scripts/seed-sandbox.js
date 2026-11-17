@@ -91,7 +91,7 @@ const POS = [
     invoices: [{ suffix: 'A', label: 'Exact match; bill must inherit the PO payment terms (Net 60)', refStyle: 'zoho', lines: 'all', carriage: 0 }] },
   { key: 'rounding', vendor: 'rustoleum', number: null, reference: null, lines: [['combi1', 7]], carriage: 0,
     invoices: [{ suffix: 'A', label: 'Unit price +0.05 → invoice 42p over the PO, inside the £1 tolerance → BILLED with the invoice total (Phase 1 adjustment); Phase 2: +0.4% increase → review', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { combi1: 0.05 } }] },
-  // --- price policy (client, 6 Nov 2026): up to 5% below the PO price → bill at the invoice price; any increase → review
+  // --- price policy: up to 5% below the PO price → bill at the invoice price; any increase → review
   { key: 'price_lower', vendor: 'rustoleum', number: null, reference: null, lines: [['emul10', 4]], carriage: 0,
     invoices: [{ suffix: 'A', label: 'Unit price −1.45 (−3.0%) → BILLED at the invoice price, noted in the report', refStyle: 'zoho', lines: 'all', carriage: 0, priceDelta: { emul10: -1.45 } }] },
   { key: 'price_lower_far', vendor: 'rustoleum', number: null, reference: null, lines: [['primer5', 3]], carriage: 0,
@@ -101,7 +101,7 @@ const POS = [
   // --- carriage on the invoice, none on the PO: the bill gets its own carriage line (CARRIAGE_ITEM_ID, else CARRIAGE_ACCOUNT_ID)
   { key: 'carriage_extra', vendor: 'harlow', number: null, reference: null, lines: [['roller', 4]], carriage: 0,
     invoices: [{ suffix: 'A', label: 'PO has no carriage line, invoice carries 8.00, vendor rule Ignore → BILLED with an added carriage line', refStyle: 'zoho', lines: 'all', carriage: 8 }] },
-  // --- client rules of 16 Nov 2026 (all on a vendor whose carriage rule is Zero, i.e. the default)
+  // --- carriage, surcharge and value-fallback rules (all on a vendor whose carriage rule is Zero, i.e. the default)
   // carriage at or below the PO is accepted under every rule and billed as invoiced
   { key: 'carriage_lower', vendor: 'rustoleum', number: null, reference: null, lines: [['combi25', 3]], carriage: 12,
     invoices: [{ suffix: 'A', label: 'Carriage 4.99 invoiced, 12.00 on the PO, rule Zero → BILLED with 4.99 on the PO carriage line; the PO is Billed', refStyle: 'zoho', lines: 'all', carriage: 4.99 }] },

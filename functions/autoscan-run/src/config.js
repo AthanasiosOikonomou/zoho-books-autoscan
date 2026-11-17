@@ -85,17 +85,17 @@ function loadConfig(rawEnv = process.env, { environment } = {}) {
 
     // --- Matching -----------------------------------------------------------
     matching: {
-      totalTolerance: num(env.TOTAL_TOLERANCE, 1.0), // GBP — client rule: £1 on the invoice total
+      totalTolerance: num(env.TOTAL_TOLERANCE, 1.0), // GBP — business rule: £1 on the invoice total
       billAdjustToInvoice: bool(env.BILL_ADJUST_TO_INVOICE, true), // the bill carries the invoice total, not the PO's: difference goes into Books' `adjustment`
       confidenceThreshold: num(env.CONFIDENCE_THRESHOLD, 0.75),
       poPrefix: env.PO_PREFIX || 'PO-',
       poPadWidth: num(env.PO_PAD_WIDTH, 5), // PO-00235
       legacyPrefixes: list(env.PO_LEGACY_PREFIXES, ['IPO/', 'IPO ', 'IPO-']),
-      poExample: env.PO_EXAMPLE || `${env.PO_PREFIX || 'PO-'}${'235'.padStart(num(env.PO_PAD_WIDTH, 5), '0')}`, // shown to the model as "the Books format" (production: PR-00123)
+      poExample: env.PO_EXAMPLE || `${env.PO_PREFIX || 'PO-'}${'235'.padStart(num(env.PO_PAD_WIDTH, 5), '0')}`, // shown to the model as "the Books format", e.g. PR-00123
       compareAgainstRemaining: bool(env.MATCH_AGAINST_REMAINING, true),
       phase2Enabled: bool(env.PHASE2_ENABLED, false),
       // --- Phase 2: line-level matching
-      // Client rule (6 Nov 2026): a unit price BELOW the PO by up to 5% is billed at the invoice price; any price ABOVE the
+      // Price policy: a unit price BELOW the PO by up to 5% is billed at the invoice price; any price ABOVE the
       // PO goes to review. Both limits are per line, as % of the PO unit price; the GBP floor only absorbs penny rounding.
       linePriceTolerancePct: num(env.LINE_PRICE_TOLERANCE_PCT, 5), // allowed % below the PO unit price
       linePriceToleranceUpPct: num(env.LINE_PRICE_TOLERANCE_UP_PCT, 0), // allowed % above the PO unit price (0 = any increase → review)
@@ -108,7 +108,7 @@ function loadConfig(rawEnv = process.env, { environment } = {}) {
       carriageRuleLabel: env.CARRIAGE_RULE_LABEL || 'Carriage Rule', // vendor custom fields
       carriageToleranceLabel: env.CARRIAGE_TOLERANCE_LABEL || 'Carriage Tolerance',
       defaultCarriageRule: env.DEFAULT_CARRIAGE_RULE || 'Zero',
-      // Client rules (16 Nov 2026). Carriage invoiced at or below the PO's carriage is accepted under every vendor rule
+      // Carriage policy. Carriage invoiced at or below the PO's carriage is accepted under every vendor rule
       // and billed as invoiced (none invoiced → the PO's carriage line stays open for a separate carriage invoice); the
       // vendor rule decides only about carriage ABOVE the PO. false = the rule applies in both directions, as before.
       carriageBelowPoOk: bool(env.CARRIAGE_BELOW_PO_OK, true),
@@ -124,7 +124,7 @@ function loadConfig(rawEnv = process.env, { environment } = {}) {
     run: {
       dryRun: bool(env.DRY_RUN, true), // SAFE DEFAULT: never writes to Books unless explicitly false
       maxNewPerRun: num(env.MAX_NEW_PER_RUN, 40),
-      // Documents created in Books before this date are never read, recorded or reported (client: the historical
+      // Documents created in Books before this date are never read, recorded or reported (the historical
       // backlog stays untouched). ISO date or date-time; unset = every inbox document is eligible (sandbox).
       scanSince: env.SCAN_SINCE ? String(env.SCAN_SINCE).trim() : null,
       maxRetryPerRun: num(env.MAX_RETRY_PER_RUN, 20),
@@ -184,7 +184,7 @@ function assertRuntimeConfig(cfg) {
     if (!cfg.report.smtp.pass) missing.push('SMTP_PASS');
   }
   if (cfg.run.scanSince && Number.isNaN(Date.parse(cfg.run.scanSince))) {
-    throw new Error(`${name('SCAN_SINCE')} must be an ISO date such as 2026-11-17 (got "${cfg.run.scanSince}")`);
+    throw new Error(`${name('SCAN_SINCE')} must be an ISO date such as 2025-01-31 (got "${cfg.run.scanSince}")`);
   }
   if (prod) {
     // Production never starts without a go-live cutoff (the historical backlog must stay untouched, dry-run included)

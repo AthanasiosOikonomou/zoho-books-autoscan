@@ -1,16 +1,41 @@
+# --- dependencies / build output
 node_modules/
-.env
-.env.*
-!.env.example
-.catalystrc
 .build/
 coverage/
 *.log
 .DS_Store
-out/
-.autoscan-state.json
+
+# --- secrets and environment (.env.example is the committed template)
+.env
+.env.*
+!.env.example
+.catalystrc
+catalyst.json.bak
+functions/autoscan-run/catalyst-config.json
+*.pem
+*.key
+
+# --- real business documents and anything derived from them: never committed
+golden/
+samples/
+documents/
+*.pdf
+*.PDF
+*.eml
+*.msg
+*.tif
+*.tiff
+*.jpg
+*.jpeg
+*.png
+*.xls
+*.xlsx
+*.csv
+# images that belong to the documentation are the one exception
+!docs/assets/**
+
+# --- generated locally: seeded ids, synthetic test invoices, reports, run state
 seed/seed-output.json
 seed/invoices/
-functions/autoscan-run/catalyst-config.json
-catalyst.json.bak
-golden/
+out/
+.autoscan-state.json

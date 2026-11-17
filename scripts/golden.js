@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * Golden set: run the extractor (Claude only — no Books, no state) over the client's
+ * Golden set: run the extractor (Claude only — no Books, no state) over a set of
  * real documents in ./golden and write what was read, for review and prompt tuning.
  *
  *   node scripts/golden.js                 → every PDF/JPG/PNG in ./golden (results cached by file hash)

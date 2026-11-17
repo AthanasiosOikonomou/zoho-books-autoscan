@@ -10,7 +10,7 @@
  * Identity: if CATALYST_TOKEN is set in .env, every catalyst command gets
  * `--token <token>` so the globally logged-in CLI user (another project) is
  * not used. Generate it once while logged in as the right user:
- *     catalyst login --force --dc eu      (sign in as the client-project user)
+ *     catalyst login --force --dc eu      (sign in as the user invited to the target project)
  *     catalyst token:generate             → CATALYST_TOKEN=... in .env
  */
 const path = require('path');
