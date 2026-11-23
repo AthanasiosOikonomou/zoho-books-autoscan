@@ -216,6 +216,10 @@ function readExtraction(dir, file) {
   return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')).extraction : null;
 }
 const money = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : String(n));
+// Books rejects item / line names over 100 characters (some source items are longer): clip the name, keep the full text as description
+const NAME_MAX = 100;
+const clipName = (s) => String(s || '').slice(0, NAME_MAX).trim();
+const isLong = (s) => String(s || '').length > NAME_MAX;
 
 // ---------------------------------------------------------------- check (offline)
 function check() {
@@ -326,9 +330,10 @@ async function push() {
     const src = snap.items[l.item_id] && !snap.items[l.item_id].error ? snap.items[l.item_id] : { name: l.name, sku: l.sku, purchase_rate: l.rate, rate: l.rate, product_type: l.product_type, custom_fields: [] };
     const sku = src.sku || l.sku || '';
     let it = sku ? ((await books.request('/items', { query: { sku } })).items || []).find((x) => String(x.sku) === String(sku)) : null;
-    if (!it) it = ((await books.request('/items', { query: { name: src.name } })).items || []).find((x) => x.name === src.name);
+    if (!it) it = ((await books.request('/items', { query: { name: clipName(src.name) } })).items || []).find((x) => x.name === clipName(src.name));
     if (!it) {
-      const body = { name: src.name, sku: sku || undefined, rate: Number(src.rate) || Number(l.rate) || 0, purchase_rate: Number(src.purchase_rate) || Number(l.rate) || 0, product_type: src.product_type === 'service' ? 'service' : 'goods', item_type: 'sales_and_purchases', purchase_description: src.purchase_description || undefined };
+      const body = { name: clipName(src.name), sku: sku || undefined, rate: Number(src.rate) || Number(l.rate) || 0, purchase_rate: Number(src.purchase_rate) || Number(l.rate) || 0, product_type: src.product_type === 'service' ? 'service' : 'goods', item_type: 'sales_and_purchases', purchase_description: src.purchase_description || (isLong(src.name) ? src.name : undefined) };
+      if (isLong(src.name)) console.log(`  ~ name clipped to ${NAME_MAX} characters (${String(src.name).length} in the source); full name kept as purchase description`);
       it = (await books.request('/items', { method: 'POST', json: body })).item;
       console.log(`+ item ${sku.padEnd(14)} ${src.name.slice(0, 60)} (${it.item_id})`);
     } else console.log(`= item ${sku.padEnd(14)} ${String(it.name).slice(0, 60)} (${it.item_id})`);
@@ -354,7 +359,7 @@ async function push() {
     else {
       const line_items = [];
       for (const l of [...p.line_items].sort((a, b) => (a.item_order || 0) - (b.item_order || 0))) {
-        const li = { item_id: out.items[l.item_id] ? out.items[l.item_id].item_id : undefined, name: l.name, description: l.description || undefined, quantity: l.quantity, rate: l.rate };
+        const li = { item_id: out.items[l.item_id] ? out.items[l.item_id].item_id : undefined, name: clipName(l.name), description: l.description || (isLong(l.name) ? l.name : undefined), quantity: l.quantity, rate: l.rate };
         const tax = await taxFor(l.tax_percentage); if (tax) li.tax_id = tax;
         const acct = accounts.get(String(l.account_name || '').trim().toLowerCase()); if (acct) li.account_id = acct;
         line_items.push(li);
