@@ -63,9 +63,10 @@ Every behaviour that can be tuned is an environment variable, read in one place:
 | `CARRIAGE_BELOW_PO_OK` | `true` | Carriage at or below the PO passes under every vendor rule. `false` applies the vendor rule in both directions. |
 | `SURCHARGE_IN_PRICE` | `true` | Treat product surcharges as part of the product price. `false` counts them as carriage. |
 | `LINE_VALUE_FALLBACK` | `true` | Allow an item without a supplier code to be matched by value when exactly one PO line fits. `false` matches by code only. |
+| `PACK_ROUNDING_PER_ITEM` | `0.005` | Pack against each: how far the money may differ per single item because the supplier rounds its price per item to the penny (25 × 4.69 = 117.25 is a pack of 25 at 117.29). `0` requires the same money to the penny. |
+| `KIT_RULE` | `true` | Bill invoice lines that match nothing else as the PO's kit line when together they make up what is still open on it. `false` sends them to review as `LINE_UNMATCHED`. |
 
-> [!NOTE]
-> `CARRIAGE_BELOW_PO_OK`, `SURCHARGE_IN_PRICE` and `LINE_VALUE_FALLBACK` are read by `src/config.js` but are not yet listed in `DEPLOY_VARS`. Until they are added there, the deployed function always uses their defaults; a value in `.env` affects local runs only.
+The five rule switches (`CARRIAGE_BELOW_PO_OK`, `SURCHARGE_IN_PRICE`, `LINE_VALUE_FALLBACK`, `PACK_ROUNDING_PER_ITEM`, `KIT_RULE`) are deployed with the function when set in `.env`; left unset, the deployed function uses the defaults above.
 
 ## Run behaviour
 

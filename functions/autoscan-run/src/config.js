@@ -118,6 +118,12 @@ function loadConfig(rawEnv = process.env, { environment } = {}) {
       // An invoice line with no code match may take the ONE open PO line without a supplier code that has the same
       // unit price and enough quantity (descriptions must share a word); anything ambiguous goes to review.
       lineValueFallback: bool(env.LINE_VALUE_FALLBACK, true),
+      // Pack ↔ each: the supplier's price per item may be rounded to the penny — allowed up to this much per item
+      // (0.005 = half a penny: 25 × 4.69 = 117.25 is a pack of 25 at 117.29). 0 = the same money to the penny, as before.
+      packRoundingPerItem: num(env.PACK_ROUNDING_PER_ITEM, 0.005),
+      // A kit the PO orders as one line, invoiced as its separate parts: the invoice lines that match nothing else are
+      // billed as the kit when together they make up the kit line still open on the PO (usual price rule, one candidate).
+      kitRule: bool(env.KIT_RULE, true),
     },
 
     // --- Queue / run behaviour ---------------------------------------------

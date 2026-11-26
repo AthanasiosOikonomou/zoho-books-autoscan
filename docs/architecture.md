@@ -134,7 +134,7 @@ Suppliers print the customer's PO reference in many shapes. `candidatesFor()` ex
 Both matchers are pure functions with no I/O.
 
 - **Phase 1 (`match.js`)** — invoice gross against the PO total within `TOTAL_TOLERANCE`, with a second chance against the PO's remaining value (PO total minus the bills already linked to it).
-- **Phase 2 (`lines.js`)** — each invoice line to one PO line by supplier code, then quantity against what is still un-billed, price against the PO within the price policy, carriage against the open carriage line and the vendor rule, and finally the recomputed total against the invoice total. All lines must pass or the whole document is an exception with per-line detail. A PO with no coded lines falls back to Phase 1 and the report says so.
+- **Phase 2 (`lines.js`)** — each invoice line to one PO line by supplier code (or by value, or — for a kit invoiced as its parts — several invoice lines to the kit line), then quantity against what is still un-billed, price against the PO within the price policy, carriage against the open carriage line and the vendor rule, and finally the recomputed total against the invoice total. All lines must pass or the whole document is an exception with per-line detail. A PO with no coded lines falls back to Phase 1 and the report says so.
 
 The rules themselves are specified in [`requirements.md`](requirements.md).
 

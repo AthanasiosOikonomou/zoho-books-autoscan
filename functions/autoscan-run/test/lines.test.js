@@ -154,7 +154,7 @@ test('pack ↔ each: same code, same money, whole pack size, units available →
   assert.equal(packUnits({ qty: 5, lineTotal: 30, poRate: 10, available: 10 }), null); // 3 units from 5: factor 1.67
   assert.equal(packUnits({ qty: 6, lineTotal: 1100, poRate: 1108.26, available: 1 }), null); // 8.26 short of one pack
   assert.equal(packUnits({ qty: 6, lineTotal: 1108.26, poRate: 184.71, available: 6 }), null); // same units: nothing to convert
-  assert.deepEqual(packUnits({ qty: 6, lineTotal: 1108.26, poRate: 1108.26, available: 1 }), { units: 1, rate: 1108.26, factor: 6 });
+  assert.deepEqual(packUnits({ qty: 6, lineTotal: 1108.26, poRate: 1108.26, available: 1 }), { units: 1, rate: 1108.26, factor: 6, rounding: 0.01 });
 });
 
 // ---- carriage at or below the PO, product surcharges, items without a supplier code
@@ -256,4 +256,76 @@ test('value fallback: an item without a supplier code is matched by value only w
   const packed = un(inv([{ mpn: 'SN-W', d: 'Stair Nosing White', quantity: 6, unit_price: 5 }]), { line_items: [plain('w', 'Stair Nosing White (box of 6)', 1, 30)] });
   assert.equal(packed.ok, true, JSON.stringify(packed.problems)); assert.deepEqual(packed.quantities, { w: 1 });
   assert.equal(shareWord('GRP Nosing 55mm', 'Stair nosing, 55mm'), true); assert.equal(shareWord('55mm x 55mm 1200', 'Profile - 55mm x 55mm'), false, 'sizes alone do not confirm a match');
+});
+
+// ---- pack ↔ each with the price per item rounded to the penny; a kit invoiced as its separate parts
+test('pack ↔ each allows the price per item rounded to the penny: up to half a penny per item, either way; a short delivery still goes to review', () => {
+  // 25 cartridges × 4.69 = 117.25 against a pack of 25 at 117.29 (4p under, allowance 12.5p) + carriage 20 → bill 164.70
+  const po = (rate) => ({ line_items: [poLine('a', 'CT-109', 1, rate, { name: 'Sealant Cartridge 295ml (Pack of 25), Grey' }), carriage(20)] });
+  const cart = (qty, price) => inv([{ mpn: 'CT-109', d: 'Sealant Cartridge 295ml Grey', quantity: qty, unit_price: price }], 20);
+  const r = matchLines({ extraction: cart(25, 4.69), po: po(117.29), vendorRule: ZERO, config: cfg() });
+  assert.equal(r.ok, true, JSON.stringify(r.problems)); assert.deepEqual(r.quantities, { a: 1 }); assert.equal(r.rates.a, 117.25); assert.equal(r.partial, false);
+  assert.equal(r.expected.gross, 164.7); assert.equal(r.expected.diff, 0);
+  assert.match(r.notes.join(' '), /invoiced 25 × 4\.69 = 117\.25, the PO counts it 25 to a pack \(1 × 117\.29\) — billed as 1 PO unit/);
+  assert.match(r.notes.join(' '), /invoiced at 117\.25 vs PO 117\.29 \(-0\.0%, billed at the invoice price\)/);
+  assert.deepEqual(packUnits({ qty: 25, lineTotal: 117.25, poRate: 117.29, available: 1, roundingPerItem: 0.005 }), { units: 1, rate: 117.25, factor: 25, rounding: 0.125 });
+  // rounded up within the allowance is rounding too, not a price increase
+  const up = matchLines({ extraction: cart(25, 4.69), po: po(117.21), vendorRule: ZERO, config: cfg() });
+  assert.equal(up.ok, true, JSON.stringify(up.problems)); assert.equal(up.rates.a, 117.25);
+  // beyond half a penny per item (25 × 4.70 = 117.50, 21p over) → no conversion, the plain reading goes to review
+  assert.equal(matchLines({ extraction: cart(25, 4.7), po: po(117.29), vendorRule: ZERO, config: cfg() }).reason.code, 'QTY_EXCEEDS');
+  // a short delivery (24 cartridges) is not a pack → review
+  assert.equal(matchLines({ extraction: cart(24, 4.69), po: po(117.29), vendorRule: ZERO, config: cfg() }).reason.code, 'QTY_EXCEEDS');
+  // PACK_ROUNDING_PER_ITEM=0 restores "the same money to the penny"
+  assert.equal(matchLines({ extraction: cart(25, 4.69), po: po(117.29), vendorRule: ZERO, config: cfg({ PACK_ROUNDING_PER_ITEM: '0' }) }).ok, false);
+  // the same invoice against an item without a supplier code: matched by value, then converted
+  const keyless = { line_items: [poLine('a', null, 1, 117.29, { name: 'Sealant Cartridge 295ml (Pack of 25), Grey', sku: 'INT-a' }), carriage(20)] };
+  const v = matchLines({ extraction: cart(25, 4.69), po: keyless, vendorRule: ZERO, config: cfg() });
+  assert.equal(v.ok, true, JSON.stringify(v.problems)); assert.equal(v.matched[0].via, 'value'); assert.deepEqual(v.quantities, { a: 1 }); assert.equal(v.expected.gross, 164.7);
+});
+
+test('kit: invoice lines that match nothing else and make up the open kit line are billed as the kit; price rule as usual; ambiguous or not a kit → review', () => {
+  const KIT = 'Resin Bound Kit: 3.5m² pack, KIT - Aggregate + Binding Quartz + Binder';
+  const kitLine = (extra = {}) => poLine('k', null, 2, 66.8, { name: KIT, sku: 'INT-k', ...extra });
+  const parts = (q = 2, binder = 15.94) => [
+    { mpn: 'AGG-01', d: 'Aggregate 1-3mm 25kg', quantity: q, unit_price: 41.2 },
+    { mpn: 'BQ-01', d: 'Binding Quartz 12.5kg', quantity: q, unit_price: 6.5 },
+    { mpn: 'BND-01', d: 'Moisture Tolerant Binder', quantity: q, unit_price: binder },
+    { mpn: 'UV-01', d: 'UV Stabiliser', quantity: q, unit_price: 1.5 },
+  ];
+  // 4 parts × 2 = 130.28 = 2 kits at 65.14 (−2.5%) + carriage 102.74 under Ignore → gross 279.62
+  const r = matchLines({ extraction: inv(parts(), 102.74), po: { line_items: [kitLine(), carriage(12)] }, vendorRule: IGNORE, config: cfg() });
+  assert.equal(r.ok, true, JSON.stringify(r.problems)); assert.deepEqual(r.quantities, { k: 2 }); assert.equal(r.rates.k, 65.14); assert.equal(r.partial, false);
+  assert.equal(r.matched.length, 1); assert.equal(r.matched[0].via, 'kit'); assert.deepEqual(r.matched[0].parts, ['AGG-01', 'BQ-01', 'BND-01', 'UV-01']);
+  assert.equal(r.expected.gross, 279.62); assert.equal(r.expected.diff, 0);
+  assert.match(r.notes.join(' '), /invoiced as 4 separate parts \(AGG-01, BQ-01, BND-01, UV-01\) totalling 130\.28 — billed as the kit, 2 × 65\.14/);
+  assert.match(r.notes.join(' '), /invoiced at 65\.14 vs PO 66\.80 \(-2\.5%, billed at the invoice price\)/);
+  const run = (extraction, po, over = {}) => matchLines({ extraction, po, vendorRule: IGNORE, config: cfg(over) });
+  // the parts cost more than the kit → review, and the report says why
+  const dear = run(inv(parts(2, 18.8)), { line_items: [kitLine()] }); // 136.00 = 2 × 68.00 (+1.8%)
+  assert.equal(dear.ok, false); assert.equal(dear.reason.code, 'LINE_UNMATCHED');
+  assert.match(dear.reason.text, /the 4 invoice lines not on the PO \(AGG-01, BQ-01, BND-01, UV-01\) add up to 136\.00 = 2 × 68\.00 vs the kit line "Resin Bound Kit.*" at 66\.80 \(\+1\.8%\) — not billed as the kit/);
+  // more than 5% below → review as well
+  assert.equal(run(inv(parts(2, 5)), { line_items: [kitLine()] }).ok, false);
+  // KIT_RULE=false → the parts are simply not on the PO
+  assert.equal(run(inv(parts()), { line_items: [kitLine()] }, { KIT_RULE: 'false' }).reason.code, 'LINE_UNMATCHED');
+  // a PO line that is not named as a kit is never taken by parts
+  assert.match(run(inv(parts()), { line_items: [kitLine({ name: 'Resin Bound Surfacing 3.5m² pack' })] }).reason.text, /AGG-01.*is not on the PO/);
+  // two kit lines the parts would fit → review
+  const twoKits = { line_items: [kitLine(), poLine('k2', null, 2, 66.8, { name: `${KIT} (second colour)`, sku: 'INT-k2' })] };
+  assert.match(run(inv(parts()), twoKits).reason.text, /fits more than one kit line/);
+  // one leftover line is not a kit
+  assert.equal(run(inv(parts().slice(0, 1)), { line_items: [kitLine()] }).ok, false);
+  // the rest of the invoice is matched as usual alongside the kit
+  const mixed = run(inv([{ mpn: 'AB-1', quantity: 2, unit_price: 10 }, ...parts()]), { line_items: [poLine('a', 'AB-1', 2, 10), kitLine()] });
+  assert.equal(mixed.ok, true, JSON.stringify(mixed.problems)); assert.deepEqual(mixed.quantities, { a: 2, k: 2 });
+  // the kit item carries one part's code as its Supplier Reference: that part still counts as a part of the kit
+  const refd = run(inv(parts()), { line_items: [poLine('k', 'AGG-01', 2, 66.8, { name: KIT })] });
+  assert.equal(refd.ok, true, JSON.stringify(refd.problems)); assert.deepEqual(refd.quantities, { k: 2 }); assert.equal(refd.matched.length, 1);
+  // the kit invoiced whole under its own code, plus a line that is not on the PO: the kit is not rebuilt from them
+  const whole = run(inv([{ mpn: 'KIT-1', d: 'Resin Bound Kit', quantity: 2, unit_price: 64 }, { mpn: 'PAL', d: 'Pallet', quantity: 1, unit_price: 1 }]), { line_items: [poLine('k', 'KIT-1', 2, 66.8, { name: KIT })] });
+  assert.equal(whole.ok, false); assert.equal(whole.reason.code, 'LINE_UNMATCHED'); assert.match(whole.reason.text, /^"PAL" \(qty 1\) is not on the PO/);
+  // one of two kits already billed: the parts of one kit close the line
+  const second = run(inv(parts(1)), { line_items: [kitLine({ quantity_billed: 1 })] });
+  assert.equal(second.ok, true, JSON.stringify(second.problems)); assert.deepEqual(second.quantities, { k: 1 }); assert.equal(second.rates.k, 65.14);
 });

@@ -20,6 +20,13 @@
  * A product surcharge on the invoice ("PRODUCT SURCHARGE 5%", "Order Surcharge") is not carriage: it is part of
  * the product price, spread over the product lines by value before the price check.
  *
+ * Pack ↔ each allows for the supplier rounding its price per item to the penny: up to half a penny per item
+ * (25 × 4.69 = 117.25 against a pack of 25 at 117.29).
+ *
+ * A kit the PO orders as one line may be invoiced as its separate parts: the invoice lines that match nothing else
+ * are billed as the kit when together they make up the kit line still open on the PO (same price rule, one
+ * candidate line only).
+ *
  * Pure: no I/O. Returns everything the bill builder needs (quantities + rates per PO line, carriage line).
  */
 const { round2 } = require('../util/money');
@@ -87,6 +94,12 @@ function poLineKeys(line, item, { supplierRefLabel = 'Supplier Reference' } = {}
   return keys;
 }
 
+// A kit line on the PO: its name says so ("... Resin Bound Kits: ..., KIT - Aggregate + Quartz + Binder").
+const KIT_RE = /\bkits?\b/i;
+function isKitLine(line) {
+  return KIT_RE.test(`${line.name || ''} ${line.description || ''}`);
+}
+
 function isCarriageLine(line, carriageItemId) {
   if (carriageItemId && String(line.item_id) === String(carriageItemId)) return true;
   return CARRIAGE_RE.test(`${line.name || ''} ${line.description || ''}`);
@@ -103,17 +116,27 @@ function round4(n) { return Math.round((n + Number.EPSILON) * 10000) / 10000; }
  * has those units: the invoice line total is a whole number of PO units to the penny (per unit), invoice quantity and
  * PO units differ by a whole factor ≥ 2, and the units are available. Anything else keeps the plain reading, which
  * then reports QTY_EXCEEDS / PRICE_MISMATCH as before.
- * @returns {{units:number, rate:number, factor:number}|null}
+ *
+ * "The same money" allows for the price per item being rounded to the penny: up to `roundingPerItem` (half a penny)
+ * per item on the side that counts single items — 25 × 4.69 = 117.25 is a pack of 25 at 117.29 (4p, within 12.5p).
+ * `rounding` is that allowance per PO unit; the price check of the converted line uses it as its rounding guard.
+ * @returns {{units:number, rate:number, factor:number, rounding:number}|null}
  */
-function packUnits({ qty, lineTotal, poRate, available, priceAbs = 0.01 }) {
+function packUnits({ qty, lineTotal, poRate, available, priceAbs = 0.01, roundingPerItem = 0 }) {
   if (!(qty > 0) || !(poRate > 0) || !Number.isFinite(lineTotal) || !(lineTotal > 0)) return null;
   const units = Math.round(lineTotal / poRate);
   if (units < 1 || units === qty) return null;
-  if (Math.abs(lineTotal - units * poRate) > priceAbs * units + 1e-9) return null;
+  const allowed = Math.max(priceAbs * units, (Number(roundingPerItem) || 0) * Math.max(qty, units));
+  if (Math.abs(lineTotal - units * poRate) > allowed + 1e-9) return null;
   const factor = qty > units ? qty / units : units / qty;
   if (Math.abs(factor - Math.round(factor)) > 1e-9 || Math.round(factor) < 2) return null;
   if (units > available + 1e-9) return null;
-  return { units, rate: round4(lineTotal / units), factor: Math.round(factor) };
+  return { units, rate: round4(lineTotal / units), factor: Math.round(factor), rounding: round4(allowed / units) };
+}
+
+/** The price band of one PO line: how far below / above the PO unit price an invoice price may be. */
+function priceBand(poRate, cfg, guard = cfg.priceAbs) {
+  return { down: Math.max(guard, round2(poRate * cfg.pricePctDown / 100)), up: Math.max(guard, round2(poRate * cfg.pricePctUp / 100)) };
 }
 
 function remainingQty(line) {
@@ -142,6 +165,8 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
     carriageBelowPoOk: config.carriageBelowPoOk ?? true, // carriage at or below the PO is accepted under every vendor rule
     surchargeInPrice: config.surchargeInPrice ?? true, // a product surcharge is part of the product price, not carriage
     valueFallback: config.lineValueFallback ?? true, // PO lines without a supplier code may be matched by value
+    packRoundingPerItem: Number(config.packRoundingPerItem ?? 0.005), // pack ↔ each: price per item rounded to the penny
+    kitRule: config.kitRule ?? true, // a kit invoiced as its separate parts is billed as the kit line of the PO
   };
   const notes = [];
   const problems = []; // { code, text }
@@ -219,7 +244,7 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
       const poRate = Number(k.line.rate); const available = remainingQty(k.line);
       if (!(p.qty > 0) || !(poRate > 0)) return false;
       if (Number.isFinite(p.rate) && Math.abs(p.rate - poRate) <= cfg.priceAbs + 1e-9 && p.qty <= available + 1e-9) return true;
-      return !!packUnits({ qty: p.qty, lineTotal: p.lineTotal, poRate, available, priceAbs: cfg.priceAbs });
+      return !!packUnits({ qty: p.qty, lineTotal: p.lineTotal, poRate, available, priceAbs: cfg.priceAbs, roundingPerItem: cfg.packRoundingPerItem });
     };
     for (const p of unmatched) p.candidates = pool.filter((k) => fits(p, k)).map((k) => k.line);
     for (const p of unmatched) {
@@ -231,10 +256,49 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
     }
   }
 
+  // 4) kit: the supplier invoices as separate parts a kit that the PO orders as one line. The invoice lines that match
+  //    nothing else — plus any line already matched to that kit line itself — are billed as the kit when together they
+  //    make up what is still open on it (kits = the open quantity, price per kit = their total / kits) within the usual
+  //    price rule. Only PO lines named as a kit, at least two parts, and exactly one kit line that fits; otherwise the
+  //    lines stay LINE_UNMATCHED and the report says why.
+  const kitEntries = [];
+  const kitProblems = [];
+  const leftovers = priced.filter((p) => !p.hit);
+  if (cfg.kitRule && leftovers.length) {
+    const partValue = (p) => (Number.isFinite(p.lineTotal) ? p.lineTotal : (Number.isFinite(p.rate) ? p.qty * p.rate : NaN));
+    const fitting = []; const tried = [];
+    for (const k of keyed) {
+      const line = k.line; const open = remainingQty(line); const poRate = Number(line.rate);
+      if (!isKitLine(line) || !(open > 0) || !(poRate > 0)) continue;
+      // a line matched to the kit line that is priced like the kit IS the kit (invoiced whole): no parts to collect
+      const own = priced.filter((p) => p.hit && p.hit.line_item_id === line.line_item_id);
+      if (own.some((p) => { const b = priceBand(poRate, cfg); const d = round2(p.rate - poRate); return Number.isFinite(p.rate) && d <= b.up + 1e-9 && -d <= b.down + 1e-9; })) continue;
+      const parts = [...leftovers, ...own];
+      if (parts.length < 2 || parts.some((p) => !Number.isFinite(partValue(p)))) continue;
+      const total = round2(parts.reduce((s, p) => s + partValue(p), 0));
+      const rate = round4(total / open);
+      const d = round2(rate - poRate); const band = priceBand(poRate, cfg);
+      const entry = { line, parts, total, rate, open, poRate, own: own.length };
+      if (d <= band.up + 1e-9 && -d <= band.down + 1e-9) fitting.push(entry); else tried.push(entry);
+    }
+    if (fitting.length === 1) {
+      const kit = fitting[0];
+      for (const p of kit.parts) { p.kit = kit; p.hit = null; }
+      kitEntries.push({ inv: { mpn: null, description: kit.line.name, quantity: kit.open }, qty: kit.open, rate: kit.rate, lineTotal: kit.total, pre: kit.parts.flatMap((p) => p.pre.map((n) => `${p.inv.mpn || p.inv.description}: ${n}`)), hit: kit.line, via: 'kit', parts: kit.parts.map((p) => p.inv.mpn || p.inv.description), candidates: [] });
+    } else if (fitting.length > 1) {
+      kitProblems.push({ code: 'LINE_UNMATCHED', text: `the ${leftovers.length} invoice lines not on the PO add up to ${round2(leftovers.reduce((s, p) => s + partValue(p), 0)).toFixed(2)}, which fits more than one kit line (${fitting.slice(0, 3).map((f) => f.line.name).join('; ')}) — not billed as a kit` });
+    } else if (tried.length === 1 && !tried[0].own) {
+      const t = tried[0];
+      const pct = `${t.rate > t.poRate ? '+' : ''}${((t.rate - t.poRate) / t.poRate * 100).toFixed(1)}%`;
+      kitProblems.push({ code: 'LINE_UNMATCHED', text: `the ${t.parts.length} invoice lines not on the PO (${t.parts.map((p) => p.inv.mpn || p.inv.description).slice(0, 6).join(', ')}) add up to ${t.total.toFixed(2)} = ${t.open} × ${price(t.rate)} vs the kit line "${t.line.name}" at ${t.poRate.toFixed(2)} (${pct}) — not billed as the kit` });
+    }
+  }
+
   const matched = []; // { inv, po, qty, rate, poRate, priceDiffPct }
   const valueMatches = []; // lines matched without a code: the report tells finance which code to add to which item
   const byPo = new Map(); // po line_item_id → accumulated qty
-  for (const p of priced) {
+  problems.push(...kitProblems);
+  for (const p of [...priced.filter((x) => !x.kit), ...kitEntries]) {
     const { inv, hit } = p;
     if (!hit) {
       const what = `"${inv.mpn || inv.description}" (qty ${inv.quantity})`;
@@ -257,12 +321,15 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
     const poRate = Number(hit.rate);
     const prev = byPo.get(hit.line_item_id) || 0;
     const remaining = remainingQty(hit);
+    if (p.via === 'kit') {
+      notes.push(`${label}: invoiced as ${p.parts.length} separate parts (${p.parts.join(', ')}) totalling ${lineTotal.toFixed(2)} — billed as the kit, ${qty} × ${price(rate)}`);
+    }
     if (p.via === 'value') {
       notes.push(`${label}: no ${cfg.supplierRefLabel} / MPN on PO line "${hit.name}" — matched by value (${qty} × ${Number.isFinite(rate) ? rate.toFixed(2) : '?'})${inv.mpn ? `; add ${cfg.supplierRefLabel} ${inv.mpn} to the item` : ''}`);
       valueMatches.push({ code: inv.mpn || null, po_line: hit.line_item_id, item_id: hit.item_id || null, name: hit.name });
     }
     // Pack ↔ each: same code, but the supplier counts single units where the PO line is a pack (or the reverse).
-    const pack = packUnits({ qty, lineTotal, poRate, available: round2(remaining - prev), priceAbs: cfg.priceAbs });
+    const pack = p.via === 'kit' ? null : packUnits({ qty, lineTotal, poRate, available: round2(remaining - prev), priceAbs: cfg.priceAbs, roundingPerItem: cfg.packRoundingPerItem });
     if (pack) {
       notes.push(`${label}: invoiced ${qty} × ${Number.isFinite(rate) ? rate.toFixed(2) : '?'} = ${lineTotal.toFixed(2)}, the PO counts it ${pack.factor} to a ${qty > pack.units ? 'pack' : 'unit'} (${pack.units} × ${poRate.toFixed(2)}) — billed as ${pack.units} PO unit${pack.units === 1 ? '' : 's'}`);
       qty = pack.units; rate = pack.rate;
@@ -275,8 +342,9 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
     if (Number.isFinite(rate) && Number.isFinite(poRate) && poRate > 0) {
       const d = round2(rate - poRate);
       const pct = `${d > 0 ? '+' : ''}${((rate - poRate) / poRate * 100).toFixed(1)}%`;
-      const tolDown = Math.max(cfg.priceAbs, round2(poRate * cfg.pricePctDown / 100));
-      const tolUp = Math.max(cfg.priceAbs, round2(poRate * cfg.pricePctUp / 100));
+      // a pack ↔ each line carries the per-item rounding as its guard (both directions: rounding, not a price change)
+      const guard = pack ? Math.max(cfg.priceAbs, pack.rounding) : cfg.priceAbs;
+      const { down: tolDown, up: tolUp } = priceBand(poRate, cfg, guard);
       const incl = surFactor !== 1 ? ` incl. the ${surPct} surcharge` : '';
       if (d > tolUp) {
         priceOk = false;
@@ -289,7 +357,7 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
       }
     }
     if (priceNote) notes.push(priceNote);
-    matched.push({ inv, po: hit, qty, rate: Number.isFinite(rate) ? rate : poRate, poRate, via: p.via, priceOk, taxPct: Number(hit.tax_percentage) || 0 });
+    matched.push({ inv, po: hit, qty, rate: Number.isFinite(rate) ? rate : poRate, poRate, via: p.via, parts: p.parts || null, priceOk, taxPct: Number(hit.tax_percentage) || 0 });
   }
   // An invoice for the carriage alone (the goods were invoiced earlier without it) has no product lines by design.
   const carriageOnly = !invLines.length && invCarriage > 0;
@@ -335,7 +403,7 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
   return {
     ok: !problems.length,
     reason: first ? { code: first.code, text: problems.length > 1 ? `${first.text}; +${problems.length - 1} more` : first.text } : null,
-    problems, notes, matched: matched.map((m) => ({ code: m.inv.mpn, po_line: m.po.line_item_id, name: m.po.name, qty: m.qty, rate: m.rate, po_rate: m.poRate, via: m.via })),
+    problems, notes, matched: matched.map((m) => ({ code: m.inv.mpn, po_line: m.po.line_item_id, name: m.po.name, qty: m.qty, rate: m.rate, po_rate: m.poRate, via: m.via, ...(m.parts ? { parts: m.parts } : {}) })),
     quantities, rates, partial, carriageOnly, valueMatches,
     surcharge: { amount: charges.surcharge, rows: charges.surcharges, pct: surFactor !== 1 ? round2((surFactor - 1) * 100) : 0 },
     carriage: { ...carriage, taxPct: carriageTaxPct, poLineId: carriageLine ? carriageLine.line_item_id : null, poLineQty: carriageQty, poLineRate: carriageQty > 0 ? round4(invCarriage / carriageQty) : 0 },
@@ -343,4 +411,4 @@ function matchLines({ extraction, po, items = new Map(), vendorRule = { rule: 'Z
   };
 }
 
-module.exports = { matchLines, normCode, poLineKeys, isCarriageLine, remainingQty, packUnits, splitCharges, isProductSurcharge, shareWord };
+module.exports = { matchLines, normCode, poLineKeys, isCarriageLine, isKitLine, remainingQty, packUnits, splitCharges, isProductSurcharge, shareWord };

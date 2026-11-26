@@ -80,7 +80,8 @@ Every exception carries a reason code (`PO_NOT_FOUND`, `PRICE_MISMATCH`, `CARRIA
 |---|---|---|
 | Line identity | Supplier's code against the PO line's *Supplier Reference* custom field, then the item MPN, SKU, item code. Compared with case, spaces, dots, dashes and slashes removed (`ZK410-KIT` = `ZK410KIT`). | `LINE_UNMATCHED` |
 | Items without a code | Matched by value only when exactly one open PO line fits (same unit price, enough quantity, a shared word in the description, no competing invoice line). | `LINE_UNMATCHED` |
-| Quantity | Not more than ordered minus already billed. Partial deliveries bill what was shipped; a pack on the PO invoiced as single units is recognised. | `QTY_EXCEEDS` |
+| Kits | A kit ordered as one PO line and invoiced as its separate parts is billed as the kit when the parts add up to what is still open on that line, within the price policy. | `LINE_UNMATCHED` |
+| Quantity | Not more than ordered minus already billed. Partial deliveries bill what was shipped; a pack on the PO invoiced as single units is recognised, allowing for the price per item rounded to the penny. | `QTY_EXCEEDS` |
 | Price | Up to 5 % below the PO price is billed at the invoice price and noted. Any increase goes to review. A product surcharge counts as part of the price. | `PRICE_MISMATCH` |
 | Carriage | At or below the PO: accepted and billed as invoiced. Above the PO: decided per vendor by two custom fields finance maintains (*Carriage Rule* Zero / Fixed / Ignore, *Carriage Tolerance*). | `CARRIAGE_MISMATCH` |
 
@@ -168,7 +169,7 @@ cp .env.example .env     # every variable is described in docs/configuration.md
 npm test
 ```
 
-The suite runs on `node:test` with in-memory fakes for Books, Claude and the state store — no network, no credentials. It ends with `# fail 0`. It covers the queue (new documents before retries, exceptions never re-read), dry-run writing nothing, duplicate detection across Books and within a run, bills posted at the invoice total, credit notes, the daily digest firing once per local day, recovery from a dead run, the environment profiles, and the line matcher in isolation: codes, partial deliveries, the price policy, pack against each, carriage at, below and above the PO under each vendor rule, surcharges inside and on top of the PO price, and every way the value fallback must refuse.
+The suite runs on `node:test` with in-memory fakes for Books, Claude and the state store — no network, no credentials. It ends with `# fail 0`. It covers the queue (new documents before retries, exceptions never re-read), dry-run writing nothing, duplicate detection across Books and within a run, bills posted at the invoice total, credit notes, the daily digest firing once per local day, recovery from a dead run, the environment profiles, and the line matcher in isolation: codes, partial deliveries, the price policy, pack against each with per-item rounding, kits invoiced as their parts, carriage at, below and above the PO under each vendor rule, surcharges inside and on top of the PO price, and every way the value fallback must refuse.
 
 Two further tools exercise the reader and the matcher on real documents without committing them: `npm run golden` reads a local, git-ignored folder with the extractor only, and `npm run replicate` rebuilds the purchase orders behind those documents in the sandbox. See [`docs/operations.md`](docs/operations.md#testing-a-new-batch-of-real-documents).
 
