@@ -137,6 +137,13 @@ function loadConfig(rawEnv = process.env, { environment } = {}) {
       concurrency: num(env.CONCURRENCY, 3),
       retryAfterHours: num(env.RETRY_AFTER_HOURS, 6), // human-fixable exceptions (PO missing, total mismatch…): re-checked every 6 h, no AI call
       retryTransientAfterMinutes: num(env.RETRY_TRANSIENT_AFTER_MINUTES, 0), // AI/Books/attach errors: 0 = next run
+      // Runs start a few seconds after their cron slot, so a document checked at 13:30:03 is not "6 h old" at 19:30:01
+      // and would wait for a later slot (or the next morning). These minutes are taken off RETRY_AFTER_HOURS.
+      retrySlackMinutes: num(env.RETRY_SLACK_MINUTES, 5),
+      // One-shot re-check: every held document last checked before this moment is re-checked on the next run, whatever
+      // RETRY_AFTER_HOURS says, so a code or rule change applies at once. scripts/catalyst-config.js stamps it with the
+      // deploy time. ISO date-time; unset or "off" = no one-shot re-check.
+      recheckHeldBefore: env.RECHECK_HELD_BEFORE && String(env.RECHECK_HELD_BEFORE).trim().toLowerCase() !== 'off' ? String(env.RECHECK_HELD_BEFORE).trim() : null,
       maxAttempts: num(env.MAX_ATTEMPTS, 28), // 28 × 6 h = a week of automatic reconciliation after the PO is fixed
       timeBudgetRatio: num(env.TIME_BUDGET_RATIO, 0.7),
       lockStaleMinutes: num(env.LOCK_STALE_MINUTES, 15),

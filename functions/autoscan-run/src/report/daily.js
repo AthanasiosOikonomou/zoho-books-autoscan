@@ -28,8 +28,23 @@ function dayRange(now, timeZone = 'Europe/London') {
   return { ymd, label, since, until, hour: h };
 }
 
+/**
+ * The digest's window: from the previous digest to now, so a bill created after yesterday's digest (a run at 17:30-19:30)
+ * is in today's. With no previous digest (the first one, or none for a week) the window starts at local midnight.
+ * Returns the day (ymd, label, hour) with since/until replaced, plus the wording used in the section titles.
+ */
+function digestPeriod({ now, timeZone = 'Europe/London', previousSentAt = null }) {
+  const day = dayRange(now, timeZone);
+  const prev = previousSentAt ? new Date(previousSentAt) : null;
+  const usePrev = !!prev && !Number.isNaN(prev.getTime()) && prev.getTime() < now.getTime();
+  const since = usePrev ? prev : day.since;
+  const sinceLabel = usePrev ? new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(prev) : null;
+  return { ...day, since, until: new Date(now.getTime()), sinceLabel, periodText: sinceLabel ? `since ${sinceLabel}` : 'today' };
+}
+
 function buildDailyReport({ day, docs, open, runs, config }) {
   const dry = config.run.dryRun;
+  const pt = day.periodText || 'today'; // "today" or "since Thu 26 Nov, 17:00"
   const billed = docs.filter((r) => r.status === STATUS.BILLED);
   const wouldBill = docs.filter((r) => r.status === STATUS.WOULD_BILL);
   const credited = docs.filter((r) => r.status === STATUS.CREDITED);
@@ -78,7 +93,7 @@ function buildDailyReport({ day, docs, open, runs, config }) {
 
   // bills
   if (billsDone.length) {
-    h.push(section(dry ? 'Would be billed today' : 'Bills created today', billsDone.length, '#1e8e5a'));
+    h.push(section(`${dry ? 'Would be billed' : 'Bills created'} ${pt}`, billsDone.length, '#1e8e5a'));
     h.push(tableOpen(['Supplier', 'Invoice #', 'Invoice date', 'PO', 'Total', '']));
     for (const r of billsDone) {
       h.push(`<tr>${td(esc(r.vendor_name))}${td(esc(r.invoice_number))}${td(esc(r.invoice_date))}${td(r.po_number ? link(poLink(r), r.po_number) : '')}${td(`£${money(r.invoice_gross)}`, 'right')}${td(billLink(r) ? link(billLink(r), 'Open bill') : '')}</tr>`);
@@ -89,7 +104,7 @@ function buildDailyReport({ day, docs, open, runs, config }) {
   }
   // credits
   if (creditsDone.length) {
-    h.push(section(dry ? 'Would be credited today' : 'Vendor credits today', creditsDone.length, '#2f6fb3'));
+    h.push(section(`${dry ? 'Would be credited' : 'Vendor credits'} ${pt}`, creditsDone.length, '#2f6fb3'));
     h.push(tableOpen(['Supplier', 'Credit note #', 'Date', 'PO', 'Against bill', 'Total', '']));
     for (const r of creditsDone) h.push(`<tr>${td(esc(r.vendor_name))}${td(esc(r.credit_number || r.invoice_number))}${td(esc(r.invoice_date))}${td(r.po_number ? link(poLink(r), r.po_number) : '')}${td(r.bill_number ? link(billLink(r), r.bill_number) : '<span style="color:#c0392b">not linked to any bill</span>')}${td(`£${money(r.invoice_gross)}`, 'right')}${td(creditLink(r) ? link(creditLink(r), 'Open credit') : '')}</tr>`);
     h.push(`</table>`);
@@ -114,13 +129,13 @@ function buildDailyReport({ day, docs, open, runs, config }) {
     h.push(`<p style="font-size:12px;color:#52606d;margin-top:16px">${pending.length} document${pending.length === 1 ? '' : 's'} from the dry-run period will be posted on the next run.</p>`);
   }
   if (dupes.length) {
-    h.push(section('Duplicates today — nothing to do', dupes.length, '#5c6b7a'));
+    h.push(section(`Duplicates ${pt} — nothing to do`, dupes.length, '#5c6b7a'));
     h.push(tableOpen(['Document', 'Supplier', 'Invoice #', 'Existing bill', '']));
     for (const r of dupes) h.push(`<tr>${td(esc(r.file_name))}${td(esc(r.vendor_name))}${td(esc(r.invoice_number))}${td(esc(r.bill_number || r.credit_number))}${td(billLink(r) ? link(billLink(r), 'Open bill') : creditLink(r) ? link(creditLink(r), 'Open credit') : '')}</tr>`);
     h.push(`</table>`);
   }
   // footer
-  h.push(`<div style="margin-top:22px;padding-top:12px;border-top:1px solid #e3e8ef;color:#7b8794;font-size:12px">${runs.length} run${runs.length === 1 ? '' : 's'} today · ${booksCalls} Zoho Books API calls · ${aiCalls} AI reads · est. AI cost $${cost.toFixed(3)} · generated ${esc(new Intl.DateTimeFormat('en-GB', { timeZone: config.report.timeZone, hour: '2-digit', minute: '2-digit' }).format(day.until > new Date() ? new Date() : day.until))}</div>`);
+  h.push(`<div style="margin-top:22px;padding-top:12px;border-top:1px solid #e3e8ef;color:#7b8794;font-size:12px">${runs.length} run${runs.length === 1 ? '' : 's'} ${esc(pt)} · ${booksCalls} Zoho Books API calls · ${aiCalls} AI reads · est. AI cost $${cost.toFixed(3)} · generated ${esc(new Intl.DateTimeFormat('en-GB', { timeZone: config.report.timeZone, hour: '2-digit', minute: '2-digit' }).format(day.until > new Date() ? new Date() : day.until))}</div>`);
   h.push(`</td></tr></table>`);
   h.push(`</td></tr></table></div>`);
 
@@ -131,7 +146,7 @@ function buildDailyReport({ day, docs, open, runs, config }) {
     ...(billsDone.length ? ['', dry ? 'WOULD BE BILLED' : 'BILLS CREATED', ...billsDone.map((r) => `  - ${r.vendor_name || ''} | ${r.invoice_number || ''} | ${r.po_number || ''} | £${money(r.invoice_gross)}${billLink(r) ? ` | ${billLink(r)}` : ''}${r.reason_text ? ` | note: ${r.reason_text}` : ''}`)] : []),
     ...(creditsDone.length ? ['', dry ? 'WOULD BE CREDITED' : 'VENDOR CREDITS', ...creditsDone.map((r) => `  - ${r.vendor_name || ''} | ${r.credit_number || r.invoice_number || ''} | PO ${r.po_number || ''} | ${r.bill_number ? `bill ${r.bill_number}` : 'NOT linked to any bill'} | £${money(r.invoice_gross)}`)] : []),
     ...orderedGroups.flatMap(([code, rows]) => ['', `${title(code).toUpperCase()} (${rows.length}): ${(REASONS[code] || {}).action || ''}`, ...rows.map((r) => `  - ${r.file_name} | ${r.vendor_name || ''} | ${r.invoice_number || ''} | ${r.po_number || ''} | ${r.reason_text || ''} | waiting ${age(r.first_seen, day.until)}`)]),
-    '', `${runs.length} runs · ${booksCalls} Books calls · ${aiCalls} AI reads · est. AI cost $${cost.toFixed(3)}`,
+    '', `${runs.length} runs ${pt} · ${booksCalls} Books calls · ${aiCalls} AI reads · est. AI cost $${cost.toFixed(3)}`,
   ].join('\n');
 
   return { subject, html: h.join('\n'), text, to: config.report.to, cc: config.report.devCopy, from: config.report.from, counts: { billed: billsDone.length, credited: creditsDone.length, attention: attention.length, duplicates: dupes.length, new: newToday.length } };
@@ -154,4 +169,4 @@ function age(iso, until) {
   return days <= 0 ? 'today' : days === 1 ? '1 day' : `${days} days`;
 }
 
-module.exports = { buildDailyReport, dayRange };
+module.exports = { buildDailyReport, dayRange, digestPeriod };

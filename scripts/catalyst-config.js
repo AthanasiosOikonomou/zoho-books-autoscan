@@ -27,7 +27,7 @@ const DEPLOY_VARS = [
   'TOTAL_TOLERANCE', 'BILL_ADJUST_TO_INVOICE', 'CONFIDENCE_THRESHOLD', 'PO_PREFIX', 'PO_PAD_WIDTH', 'PO_EXAMPLE', 'PO_LEGACY_PREFIXES', 'MATCH_AGAINST_REMAINING', 'PHASE2_ENABLED',
   'LINE_PRICE_TOLERANCE_PCT', 'LINE_PRICE_TOLERANCE_UP_PCT', 'LINE_PRICE_TOLERANCE_ABS', 'SUPPLIER_REF_LABEL', 'CARRIAGE_ITEM_ID', 'CARRIAGE_ACCOUNT_ID', 'CARRIAGE_RULE_LABEL', 'CARRIAGE_TOLERANCE_LABEL', 'DEFAULT_CARRIAGE_RULE',
   'CARRIAGE_BELOW_PO_OK', 'SURCHARGE_IN_PRICE', 'LINE_VALUE_FALLBACK', 'PACK_ROUNDING_PER_ITEM', 'KIT_RULE',
-  'DRY_RUN', 'MAX_NEW_PER_RUN', 'SCAN_SINCE', 'MAX_RETRY_PER_RUN', 'CONCURRENCY', 'RETRY_AFTER_HOURS', 'RETRY_TRANSIENT_AFTER_MINUTES', 'MAX_ATTEMPTS', 'TIME_BUDGET_RATIO', 'LOCK_STALE_MINUTES',
+  'DRY_RUN', 'MAX_NEW_PER_RUN', 'SCAN_SINCE', 'MAX_RETRY_PER_RUN', 'CONCURRENCY', 'RETRY_AFTER_HOURS', 'RETRY_TRANSIENT_AFTER_MINUTES', 'RETRY_SLACK_MINUTES', 'RECHECK_HELD_BEFORE', 'MAX_ATTEMPTS', 'TIME_BUDGET_RATIO', 'LOCK_STALE_MINUTES',
   'REPORT_TO', 'REPORT_DEV_COPY', 'REPORT_FROM', 'REPORT_SUBJECT_PREFIX', 'BOOKS_APP_BASE', 'DAILY_REPORT_HOUR', 'REPORT_TIMEZONE', 'REPORT_PER_RUN',
   'MAIL_TRANSPORT', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASS',
   'LOG_LEVEL',
@@ -56,6 +56,15 @@ if (!prodVars.length) console.log('Note: no PROD_ variables in .env — fine whi
 else if (prodMissing.length) console.log(`Note: production profile incomplete (${prodMissing.join(', ')}) — the function refuses to run in the Production environment until they are set.`);
 else if (env.PROD_DRY_RUN !== 'false') console.log('Note: PROD_DRY_RUN is not "false" — Production will run in dry-run mode (correct until UAT sign-off).');
 else console.log('WARNING: PROD_DRY_RUN=false — the Production environment will create bills in the production organisation.');
+
+// One-shot re-check after a deploy: every held document last checked before the deploy is re-checked on the next run,
+// so a code or rule change applies at once. Stamped with now unless .env sets a value; RECHECK_HELD_BEFORE=off disables.
+const recheck = String(process.env.RECHECK_HELD_BEFORE || '').trim();
+if (recheck.toLowerCase() === 'off') delete env.RECHECK_HELD_BEFORE;
+else if (!recheck) env.RECHECK_HELD_BEFORE = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+console.log(env.RECHECK_HELD_BEFORE
+  ? `RECHECK_HELD_BEFORE=${env.RECHECK_HELD_BEFORE} — every held document is re-checked once on the next run after this deploy.`
+  : 'RECHECK_HELD_BEFORE=off — held documents wait for their normal retry window.');
 
 const out = { ...example, deployment: { ...example.deployment, env_variables: env } };
 console.log(`${check ? 'Would write' : 'Writing'} ${path.relative(process.cwd(), TARGET)} with ${Object.keys(env).length} variables: ${Object.keys(env).join(', ')}`);

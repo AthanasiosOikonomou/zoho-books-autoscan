@@ -36,7 +36,7 @@ A document's **status** says where it stands; an exception also carries a **reas
 
 ### Reason codes
 
-Every open document is re-evaluated every `RETRY_AFTER_HOURS` (6) up to `MAX_ATTEMPTS` (28) using the stored reading, so the "fix" column is all that is needed — nobody has to re-trigger anything. Service errors are retried on the next run.
+Every open document is re-evaluated every `RETRY_AFTER_HOURS` (6) up to `MAX_ATTEMPTS` (28) using the stored reading, so the "fix" column is all that is needed — nobody has to re-trigger anything. Service errors are retried on the next run. After a deploy, every open document is re-checked once on the next run (`RECHECK_HELD_BEFORE`), so a code or rule change does not wait for the 6-hour window.
 
 | Reason | Meaning | Fix |
 |---|---|---|
@@ -66,7 +66,7 @@ The reason codes and the instruction text shown to finance are defined in `funct
 
 1. Read the reason and the detail in the daily digest; follow the link to the PO.
 2. Fix the cause **in Books**: the PO, the item's supplier code, or the vendor's carriage rule.
-3. Do nothing else. Within `RETRY_AFTER_HOURS` the document is re-checked against the corrected data and billed. No AI call is made for this.
+3. Do nothing else. Within `RETRY_AFTER_HOURS` (on the first run inside the cron's hours) the document is re-checked against the corrected data and billed. No AI call is made for this.
 
 If the document should not be billed at all, bill or file it by hand and remove it from the inbox; it then drops out of the report.
 

@@ -15,7 +15,8 @@ const { createSmtpMailer, createMailer } = require('../src/report/mailers');
 const { createLogger, describeError, errorMessage } = require('../src/logger');
 const { createExtractor, renderPrompt, loadPrompt } = require('../src/claude/extractor');
 const { JsonFileStore, CatalystStore, wrapStoreError, isTransientStoreError } = require('../src/state/store');
-const { buildDailyReport, dayRange } = require('../src/report/daily');
+const { buildDailyReport, dayRange, digestPeriod } = require('../src/report/daily');
+const { retryCutoff } = require('../src/pipeline/run');
 const { sendDailyReportIfDue } = require('../src/report/dailyTrigger');
 
 test('matchTotals: within tolerance on PO total', () => {
@@ -229,6 +230,37 @@ test('retry window: a PROCESSING claim older than the lock window (dead run) is 
   assert.deepEqual((await store.listRetryCandidates({ ...args, staleOlderThan: undefined })).map((r) => r.document_id), [], 'without a stale window PROCESSING rows are never retried');
 });
 
+test('retry cutoff: the slack lets a document checked at 13:30:03 into the 19:30:01 run; never later than the run start', async () => {
+  const silent = { warn() {} };
+  const run = loadConfig({}).run;
+  assert.equal(run.retrySlackMinutes, 5); assert.equal(run.recheckHeldBefore, null);
+  const started = new Date('2026-11-26T19:30:01Z');
+  const checked = new Date('2026-11-26T13:30:03Z');
+  assert.ok(checked <= retryCutoff(started, run, silent), '6 h slot later, despite starting 2 s early');
+  assert.ok(checked > retryCutoff(started, { ...run, retrySlackMinutes: 0 }, silent), 'without slack it waits for a later slot');
+  assert.equal(retryCutoff(started, { ...run, retryAfterHours: 0 }, silent).getTime(), started.getTime(), 'slack never reaches past the run start');
+  // the same through the store: the 19:30 run picks it up, the 19:00 run does not
+  const store = new JsonFileStore();
+  await store.upsert({ document_id: 'k', file_name: 'k.pdf', status: 'EXCEPTION', reason_code: 'LINE_UNMATCHED', attempts: 3, first_seen: checked.toISOString(), last_attempt: checked.toISOString() });
+  const at = (iso) => store.listRetryCandidates({ olderThan: retryCutoff(new Date(iso), run, silent), maxAttempts: 28, limit: 20 });
+  assert.equal((await at('2026-11-26T19:00:02Z')).length, 0);
+  assert.equal((await at('2026-11-26T19:30:01Z')).length, 1);
+});
+test('retry cutoff: RECHECK_HELD_BEFORE re-checks everything held before the deploy, once; a future or invalid stamp is ignored', () => {
+  const warned = []; const logger = { warn: (e, m) => warned.push(m.reason) };
+  const run = loadConfig({ RECHECK_HELD_BEFORE: '2026-11-26T14:40:00Z' }).run;
+  assert.equal(run.recheckHeldBefore, '2026-11-26T14:40:00Z');
+  const cut = retryCutoff(new Date('2026-11-26T15:00:01Z'), run, logger);
+  assert.equal(cut.toISOString(), '2026-11-26T14:40:00.000Z', 'the deploy time wins over the 6 h window');
+  assert.ok(new Date('2026-11-26T13:30:03Z') <= cut, 'checked before the deploy → re-checked now');
+  assert.ok(new Date('2026-11-26T15:00:03Z') > retryCutoff(new Date('2026-11-26T15:30:01Z'), run, logger), 're-checked after the deploy → back to the normal window');
+  assert.equal(retryCutoff(new Date('2026-11-27T02:00:01Z'), run, logger).toISOString(), '2026-11-26T20:05:01.000Z', 'normal window once it is later than the stamp');
+  assert.equal(retryCutoff(new Date('2026-11-26T14:00:00Z'), run, logger).toISOString(), '2026-11-26T08:05:00.000Z', 'a stamp in the future is ignored');
+  assert.equal(retryCutoff(new Date('2026-11-26T15:00:00Z'), { ...run, recheckHeldBefore: 'yesterday' }, logger).toISOString(), '2026-11-26T09:05:00.000Z', 'not a date → ignored');
+  assert.deepEqual(warned, ['in the future', 'not a date']);
+  assert.equal(loadConfig({ RECHECK_HELD_BEFORE: 'off' }).run.recheckHeldBefore, null);
+});
+
 test('bill adjustment: the bill carries the invoice total — difference to the PO-priced template goes into `adjustment`', () => {
   const template = { vendor_id: 'v', date: '2026-11-03', purchaseorder_ids: ['p'], total: 248.4, line_items: [{ purchaseorder_item_id: 'a', item_id: 'i', name: 'n', account_id: 'acc', quantity: 4, rate: 51.75 }] };
   const p = buildBillPayload({ template, invoiceNumber: 'INV-1', invoiceDate: '2026-11-03', invoiceGross: 248.95, adjustToInvoice: true });
@@ -318,6 +350,36 @@ test('daily trigger: not before the hour, once per day, marker in run_log, force
   assert.equal((await sendDailyReportIfDue({ config: loadConfig({ BOOKS_ORG_ID: 'org', DAILY_REPORT_HOUR: 'off' }), store, mailer, logger, now: new Date('2026-11-06T20:00:00Z') })).reason, 'disabled');
   // the marker row is never RUNNING, so it cannot block the run lock
   assert.equal((await store.getActiveRun({ staleMinutes: 15, now: new Date('2026-11-04T17:06:00Z').getTime() })), null);
+});
+
+test('daily digest window: from the previous digest to now — a bill created after yesterday\'s digest is in today\'s', async () => {
+  const store = new JsonFileStore();
+  const sent = []; const mailer = { async send(r) { sent.push(r); } };
+  const logger = { info() {}, warn() {}, error() {} };
+  const config = loadConfig({ BOOKS_ORG_ID: 'org', DRY_RUN: 'false', DAILY_REPORT_HOUR: '17' });
+  const bill = (id, at) => ({ document_id: id, file_name: `${id}.pdf`, status: 'BILLED', vendor_name: 'Acme', invoice_number: `INV-${id}`, bill_id: `b-${id}`, invoice_gross: 10, first_seen: at, last_attempt: at });
+  await store.upsert(bill('morning', '2026-11-26T07:00:03.000Z'));
+  const d1 = await sendDailyReportIfDue({ config, store, mailer, logger, now: new Date('2026-11-26T17:00:03Z') });
+  assert.equal(d1.counts.billed, 1);
+  assert.ok(sent[0].html.includes('Bills created today'), 'first digest ever: from midnight');
+  await store.upsert(bill('evening', '2026-11-26T19:30:02.000Z')); // a run after the digest, same day
+  await store.upsert(bill('next', '2026-11-27T07:00:03.000Z'));
+  const d2 = await sendDailyReportIfDue({ config, store, mailer, logger, now: new Date('2026-11-27T17:00:02Z') });
+  assert.equal(d2.counts.billed, 2, 'yesterday evening + this morning');
+  assert.ok(d2.report.text.includes('INV-evening') && d2.report.text.includes('INV-next') && !d2.report.text.includes('INV-morning'));
+  assert.ok(d2.report.html.includes('Bills created since Thu 26 Nov, 17:00'));
+  // a forced re-send the same day covers the same window, never only "since this morning's re-send"
+  const again = await sendDailyReportIfDue({ config, store, mailer, logger, now: new Date('2026-11-27T18:00:00Z'), explicit: true, force: true });
+  assert.equal(again.counts.billed, 2);
+});
+test('digest period: no previous digest → today from midnight; a previous one → since it; an unusable one → midnight', () => {
+  const now = new Date('2026-11-27T17:00:02Z');
+  const first = digestPeriod({ now, timeZone: 'Europe/London' });
+  assert.equal(first.since.toISOString(), '2026-11-27T00:00:00.000Z'); assert.equal(first.periodText, 'today'); assert.equal(first.until.toISOString(), now.toISOString());
+  const next = digestPeriod({ now, timeZone: 'Europe/London', previousSentAt: '2026-11-26T17:00:03.000Z' });
+  assert.equal(next.since.toISOString(), '2026-11-26T17:00:03.000Z'); assert.equal(next.periodText, 'since Thu 26 Nov, 17:00'); assert.equal(next.ymd, '2026-11-27');
+  assert.equal(digestPeriod({ now, previousSentAt: '2026-11-28T00:00:00Z' }).periodText, 'today', 'a marker in the future is not used');
+  assert.equal(digestPeriod({ now, previousSentAt: 'garbage' }).periodText, 'today');
 });
 
 test('store errors: SDK objects with getter-only code/message and plain-string rejections are wrapped, never mutated', () => {

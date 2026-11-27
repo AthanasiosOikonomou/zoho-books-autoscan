@@ -135,7 +135,7 @@ Anything not matched with confidence goes to manual review: a reading below `CON
 
 ## 14. Reporting
 
-One email at the end of the day, readable by someone who never opens a log: bills created with links into Books, vendor credits and whether each is linked to a bill, everything still waiting grouped by reason with the action and how long it has waited, duplicates, and the day's cost. A bill created with a remark — billed below the PO price, matched by value, carriage left open, surcharge folded into the price — shows that note. `DAILY_REPORT_HOUR` [17], `REPORT_TIMEZONE`. Code: `src/report/daily.js`.
+One email at the end of the day, readable by someone who never opens a log: bills created with links into Books, vendor credits and whether each is linked to a bill, everything still waiting grouped by reason with the action and how long it has waited, duplicates, and the day's cost. It covers everything since the previous digest, so a bill created by a run after the digest is in the next day's email. A bill created with a remark — billed below the PO price, matched by value, carriage left open, surcharge folded into the price — shows that note. `DAILY_REPORT_HOUR` [17], `REPORT_TIMEZONE`. Code: `src/report/daily.js`.
 
 ## 15. Deliberately not done
 

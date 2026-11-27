@@ -206,6 +206,31 @@ test('a prompt change re-reads documents parked for a reading or matching reason
   assert.equal(ex.seen.length, 4, 'same prompt on the next retry: the stored extraction is reused, no AI call');
 });
 
+test('after a deploy (RECHECK_HELD_BEFORE) held documents are re-checked on the next run, once, without an AI call', async () => {
+  const myPos = [...pos];
+  const books = fakeBooks({ docs: [
+    { document_id: 'd40', file_name: 'fixable.pdf', transactions: [] },
+    { document_id: 'd41', file_name: 'still-held.pdf', transactions: [] },
+  ], pos: myPos });
+  const ex = fakeExtractor({ d40: { po_reference: 'PO-00009', gross: 120 }, d41: { po_reference: 'PO-00077', gross: 50 } });
+  const store = new JsonFileStore(); const m = mailer();
+  const t0 = new Date('2026-11-26T13:30:03Z');
+  const at = (min) => () => new Date(t0.getTime() + min * 60000);
+  const r1 = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store, mailer: m, logger, now: at(0) });
+  assert.deepEqual(r1.results.map((x) => x.reason_code).sort(), ['PO_NOT_FOUND', 'PO_NOT_FOUND']);
+  // the PO the first document needs now exists (in real life: the rule that bills it was deployed)
+  myPos.push({ purchaseorder_id: 'po9', purchaseorder_number: 'PO-00009', vendor_id: 'v1', vendor_name: 'Vendor', total: 120, payment_terms: 30, line_items: [{ purchaseorder_item_id: 'z', item_id: 'i', name: 'Z', account_id: 'a', quantity: 4, rate: 30 }] });
+  const r2 = await runAutoscan({ config: cfg({ DRY_RUN: 'false' }), books: books.api, extractor: ex, store, mailer: m, logger, now: at(60) });
+  assert.equal(r2.results.length, 0, 'inside the normal retry window nothing is re-checked');
+  const deployed = cfg({ DRY_RUN: 'false', RECHECK_HELD_BEFORE: new Date(t0.getTime() + 70 * 60000).toISOString() });
+  const r3 = await runAutoscan({ config: deployed, books: books.api, extractor: ex, store, mailer: m, logger, now: at(90) });
+  const by3 = Object.fromEntries(r3.results.map((x) => [x.document_id, x.status]));
+  assert.equal(by3.d40, STATUS.BILLED); assert.equal(by3.d41, STATUS.EXCEPTION);
+  assert.equal(ex.seen.length, 2, 'stored extraction reused — no AI call');
+  const r4 = await runAutoscan({ config: deployed, books: books.api, extractor: ex, store, mailer: m, logger, now: at(120) });
+  assert.equal(r4.results.length, 0, 'one-shot: the document still held was re-checked after the stamp and waits for its normal window');
+});
+
 test('two copies of the same invoice in one batch: one bill, the other DUPLICATE, never a Books error', async () => {
   const books = fakeBooks({ docs: [
     { document_id: 'd20', file_name: 'copy1.pdf', transactions: [] },

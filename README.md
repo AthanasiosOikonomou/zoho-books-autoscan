@@ -25,8 +25,8 @@ AutoScan is the rebuild: a Node.js job on Zoho Catalyst with its own state, a re
 | **Match** | Phase 1 compares the invoice total with the PO total, or with what is still un-billed on it. Phase 2 matches every invoice line to a PO line by the supplier's code, then checks quantity, price and carriage. |
 | **Bill** | A bill is created from the PO with the supplier's invoice number and invoice date, at the **invoice** amounts, opened, and the PDF attached. The inbox file is deleted only after the attachment is verified. |
 | **Credit notes** | A supplier credit note becomes a Books vendor credit, applied to the bill it refers to when that bill can be identified. |
-| **Reconcile** | A document that could not be billed stays in the inbox with a reason code and is re-checked every 6 hours for a week, using the stored reading — no second AI call. Fix the PO in Books and the bill appears on its own. |
-| **Report** | One HTML digest per day: bills created (with links into Books), vendor credits, everything waiting for a person grouped by reason with the action to take, duplicates, and the day's AI cost. |
+| **Reconcile** | A document that could not be billed stays in the inbox with a reason code and is re-checked every 6 hours for a week, using the stored reading — no second AI call. Fix the PO in Books and the bill appears on its own. After a deploy every held document is re-checked on the next run, so a new rule applies at once. |
+| **Report** | One HTML digest per day, covering everything since the previous one: bills created (with links into Books), vendor credits, everything waiting for a person grouped by reason with the action to take, duplicates, and the day's AI cost. |
 
 ## Architecture
 
@@ -169,7 +169,7 @@ cp .env.example .env     # every variable is described in docs/configuration.md
 npm test
 ```
 
-The suite runs on `node:test` with in-memory fakes for Books, Claude and the state store — no network, no credentials. It ends with `# fail 0`. It covers the queue (new documents before retries, exceptions never re-read), dry-run writing nothing, duplicate detection across Books and within a run, bills posted at the invoice total, credit notes, the daily digest firing once per local day, recovery from a dead run, the environment profiles, and the line matcher in isolation: codes, partial deliveries, the price policy, pack against each with per-item rounding, kits invoiced as their parts, carriage at, below and above the PO under each vendor rule, surcharges inside and on top of the PO price, and every way the value fallback must refuse.
+The suite runs on `node:test` with in-memory fakes for Books, Claude and the state store — no network, no credentials. It ends with `# fail 0`. It covers the queue (new documents before retries, exceptions never re-read), dry-run writing nothing, duplicate detection across Books and within a run, bills posted at the invoice total, credit notes, the daily digest firing once per local day and covering everything since the previous one, the retry window with its slack and the one-shot re-check after a deploy, recovery from a dead run, the environment profiles, and the line matcher in isolation: codes, partial deliveries, the price policy, pack against each with per-item rounding, kits invoiced as their parts, carriage at, below and above the PO under each vendor rule, surcharges inside and on top of the PO price, and every way the value fallback must refuse.
 
 Two further tools exercise the reader and the matcher on real documents without committing them: `npm run golden` reads a local, git-ignored folder with the extractor only, and `npm run replicate` rebuilds the purchase orders behind those documents in the sandbox. See [`docs/operations.md`](docs/operations.md#testing-a-new-batch-of-real-documents).
 

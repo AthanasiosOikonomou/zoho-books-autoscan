@@ -64,14 +64,14 @@ async function runAutoscan(deps) {
       .slice(0, config.run.maxNewPerRun);
 
     const retryRecords = (await store.listRetryCandidates({
-      olderThan: new Date(startedAt.getTime() - config.run.retryAfterHours * 3600000),
+      olderThan: retryCutoff(startedAt, config.run, logger),
       transientOlderThan: new Date(startedAt.getTime() - (config.run.retryTransientAfterMinutes || 0) * 60000),
       staleOlderThan: new Date(startedAt.getTime() - config.run.lockStaleMinutes * 60000),
       maxAttempts: config.run.maxAttempts,
       limit: config.run.maxRetryPerRun,
     })).filter((r) => byId.has(String(r.document_id))); // must still be in the inbox
 
-    logger.info('run.scan', { profile: config.profile || 'sandbox', inbox: inbox.length, known: known.size, new: newDocs.length, retry: retryRecords.length, skipped_old: skippedOld, scan_since: config.run.scanSince, dry_run: config.run.dryRun });
+    logger.info('run.scan', { profile: config.profile || 'sandbox', inbox: inbox.length, known: known.size, new: newDocs.length, retry: retryRecords.length, skipped_old: skippedOld, scan_since: config.run.scanSince, recheck_held_before: config.run.recheckHeldBefore, dry_run: config.run.dryRun });
 
     const ctx = { config, books, extractor, store, logger, terms, runId, now, claims: new Map() };
 
@@ -147,6 +147,26 @@ async function runAutoscan(deps) {
   return { ...run, results };
 }
 
+/**
+ * Held documents (exceptions, dry-run results, missing attachments) last checked at or before this moment are retried.
+ *   - RETRY_AFTER_HOURS minus RETRY_SLACK_MINUTES: a run starts a few seconds after its cron slot, so without the slack
+ *     a document checked at 13:30:03 misses the 19:30:01 run by two seconds. Never later than the run start.
+ *   - RECHECK_HELD_BEFORE (the deploy time): everything checked before it is retried once, now — after a code or rule
+ *     change nobody waits for the normal window. A retried document is checked after the stamp, so it does not repeat.
+ *     A stamp in the future or not a date is ignored (it would re-check the same documents on every run).
+ */
+function retryCutoff(startedAt, run, logger) {
+  const t = startedAt.getTime();
+  let cutoff = Math.min(t, t - (run.retryAfterHours || 0) * 3600000 + (run.retrySlackMinutes || 0) * 60000);
+  if (run.recheckHeldBefore) {
+    const recheck = Date.parse(run.recheckHeldBefore);
+    if (Number.isNaN(recheck)) logger.warn('run.recheck_ignored', { recheck_held_before: run.recheckHeldBefore, reason: 'not a date' });
+    else if (recheck > t) logger.warn('run.recheck_ignored', { recheck_held_before: run.recheckHeldBefore, reason: 'in the future' });
+    else if (recheck > cutoff) cutoff = recheck;
+  }
+  return new Date(cutoff);
+}
+
 function collect(results, pass, items, mode) {
   pass.results.forEach((r, i) => {
     if (!r) return;
@@ -180,4 +200,4 @@ function parseBooksTime(v) {
   return Number.isNaN(t) ? null : t;
 }
 
-module.exports = { runAutoscan, summarise };
+module.exports = { runAutoscan, summarise, retryCutoff };

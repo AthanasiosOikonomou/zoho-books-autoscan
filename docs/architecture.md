@@ -68,7 +68,7 @@ sequenceDiagram
         end
         F->>D: close run_log (DONE or FAILED, counts, cost)
         opt local time past DAILY_REPORT_HOUR and no digest sent today
-            F->>D: today's documents, open exceptions, today's runs
+            F->>D: documents and runs since the previous digest, open exceptions
             F->>M: daily digest
             F->>D: marker row for today's digest
         end
@@ -105,7 +105,8 @@ stateDiagram-v2
 ```
 
 - `BILLED`, `CREDITED` and `DUPLICATE` are terminal. Everything else is open and appears under "needs attention" in the daily digest.
-- **Retry windows.** Open documents are re-evaluated every `RETRY_AFTER_HOURS` (6), up to `MAX_ATTEMPTS` (28) — one week. Service errors (`AI_ERROR`, `BOOKS_ERROR`, `ATTACH_FAILED`) are retried on the next run. A `PROCESSING` claim older than `LOCK_STALE_MINUTES` belongs to a run that died and is retried as well.
+- **Retry windows.** Open documents are re-evaluated every `RETRY_AFTER_HOURS` (6) less `RETRY_SLACK_MINUTES` (5), up to `MAX_ATTEMPTS` (28) — one week. The slack exists because a run starts a few seconds after its cron slot: without it a document checked at 13:30:03 is two seconds short of six hours at 19:30:01 and, with a cron that stops in the evening, waits until the next morning. Service errors (`AI_ERROR`, `BOOKS_ERROR`, `ATTACH_FAILED`) are retried on the next run. A `PROCESSING` claim older than `LOCK_STALE_MINUTES` belongs to a run that died and is retried as well.
+- **Re-check after a deploy.** `RECHECK_HELD_BEFORE` is stamped with the deploy time; every open document last checked before it is re-checked on the next run (still capped by `MAX_RETRY_PER_RUN`, oldest first). Once checked it is past the stamp, so the re-check happens once.
 - **`WOULD_BILL` is retry-eligible on purpose**: the first live run after a dry-run period bills what the dry runs matched.
 - A document that leaves the inbox (billed by hand, deleted) simply stops being a candidate; its row remains as history.
 
@@ -214,7 +215,7 @@ The profile is derived from the environment rather than from a variable because 
 | Carriage is a line item on the PO (Books POs have no shipping field). | Carriage comparison finds no PO carriage; invoiced carriage is then governed entirely by the vendor rule. |
 | Items carry the supplier's code (*Supplier Reference* or MPN). | Phase 2 falls back to value matching for single lines, or to totals for the whole PO. |
 | One organisation and one currency per deployment. | Tolerances and totals would compare amounts in different currencies. |
-| The cron fires at least once after `DAILY_REPORT_HOUR`. | That day's digest is not sent. |
+| The cron fires at least once after `DAILY_REPORT_HOUR`. | That day's digest is not sent; the next one covers both days. |
 | The Books Documents endpoints keep their current request shapes. | Scan, download or delete fail; see `src/books/client.js`. |
 
 ## 12. Danger zones

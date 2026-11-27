@@ -80,6 +80,8 @@ The five rule switches (`CARRIAGE_BELOW_PO_OK`, `SURCHARGE_IN_PRICE`, `LINE_VALU
 | `RETRY_AFTER_HOURS` | `6` | How often an open document is re-evaluated. No AI call is made on these retries. |
 | `MAX_ATTEMPTS` | `28` | Attempts before a document is left for manual handling. With the default interval this is one week. |
 | `RETRY_TRANSIENT_AFTER_MINUTES` | `0` | Delay before retrying service errors. `0` retries on the next run. |
+| `RETRY_SLACK_MINUTES` | `5` | Minutes taken off `RETRY_AFTER_HOURS`. A run starts a few seconds after its cron slot; without the slack a document checked at 13:30:03 misses the 19:30:01 run and waits for the next slot, or the next morning. |
+| `RECHECK_HELD_BEFORE` | stamped at deploy | ISO date-time. Every open document last checked before it is re-checked once on the next run, whatever `RETRY_AFTER_HOURS` says, so a code or rule change applies at once. `scripts/catalyst-config.js` sets it to the deploy time when `.env` leaves it empty; `off` disables it. A value in the future or not a date is ignored with a warning. |
 | `TIME_BUDGET_RATIO` | `0.7` | Share of the function's maximum execution time after which no further documents are started. |
 | `LOCK_STALE_MINUTES` | `15` | Age after which a `RUNNING` run or a `PROCESSING` claim is considered dead. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
@@ -93,8 +95,8 @@ The five rule switches (`CARRIAGE_BELOW_PO_OK`, `SURCHARGE_IN_PRICE`, `LINE_VALU
 | `REPORT_DEV_COPY` | empty | Comma-separated addresses copied on every report. |
 | `REPORT_FROM` | `SMTP_USER` | Sender address. Leave empty for SMTP; for Catalyst Mail it must be a verified sender. |
 | `REPORT_SUBJECT_PREFIX` | `AutoScan` | Subject prefix, useful to tell environments apart. |
-| `DAILY_REPORT_HOUR` | `17` | Local hour after which the first run sends the day's digest. `off` disables it. |
-| `REPORT_TIMEZONE` | `Europe/London` | Time zone for "today" and for `DAILY_REPORT_HOUR`. |
+| `DAILY_REPORT_HOUR` | `17` | Local hour after which the first run sends the day's digest. It covers everything since the previous digest (from midnight when there is none in the last week), so bills created by runs after the digest appear in the next one. `off` disables it. |
+| `REPORT_TIMEZONE` | `Europe/London` | Time zone for the digest's day and for `DAILY_REPORT_HOUR`. |
 | `REPORT_PER_RUN` | `false` | Also email the per-run report. By default it goes to the log only. |
 | `SMTP_HOST` | `smtp.zoho.eu` | SMTP server. |
 | `SMTP_PORT` | `465` | `465` with `SMTP_SECURE=true` (implicit TLS) or `587` with `SMTP_SECURE=false` (STARTTLS). |
